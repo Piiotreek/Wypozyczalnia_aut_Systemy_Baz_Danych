@@ -1,0 +1,56 @@
+flowchart LR
+    K[<b>Klient</b>]
+    P[<b>Serwisant</b>]
+    A[<b>Manager</b>]
+
+    subgraph Sklep["Punkt Stacjonarny: Wypożyczalnia i Serwis"]
+        direction TB
+        UC2([Mierzenie i dopasowanie sprzętu])
+        UC15([Dobór rozmiaru])
+        UC3([Weryfikacja tożsamości])
+        UC4([Podpisanie umowy najmu])
+        UC7([Zwrot sprzętu z wypożyczalni])
+        
+        UC5([Zakup akcesoriów])
+        UC6([Opłacenie usług i towarów])
+        UC10([Przyjęcie płatności])
+        
+        UC19([Oddanie zepsutego sprzętu do serwisu])
+        UC16([Naprawa sprzętu])
+        UC17([Woskowanie / Ostrzenie])
+        UC18([Odbiór naprawionego sprzętu])
+        UC9([Regulacja wiązań])
+        UC8([Doradztwo techniczne])
+        
+        UC11([Kontrola stanów magazynowych])
+        UC12([Zarządzanie gotówką w kasie])
+        UC13([Ustalanie cennika i promocji])
+        UC14([Planowanie serwisu technicznego])
+    end
+
+    K --- UC2
+    K --- UC4
+    K --- UC5
+    K --- UC6
+    K --- UC7
+    K --- UC19
+    K --- UC18
+
+    P --- UC2
+    P --- UC8
+    P --- UC9
+    P --- UC10
+    P --- UC3
+    P --- UC16
+    P --- UC17
+    P --- UC19
+    P --- UC18
+
+    A --- UC11
+    A --- UC12
+    A --- UC13
+    A --- UC14
+
+    UC2 -.->|include| UC15
+    UC4 -.->|include| UC3
+    UC9 -.->|extend| UC2
