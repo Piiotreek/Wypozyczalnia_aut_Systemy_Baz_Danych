@@ -1,0 +1,118 @@
+CREATE TABLE Dict_Statusy_Pojazdu (
+    ID_Statusu NUMBER CONSTRAINT pk_dict_statusy PRIMARY KEY,
+    Nazwa_Statusu VARCHAR2(30)
+);
+
+CREATE TABLE Dict_Kategorie (
+    ID_Kategorii NUMBER CONSTRAINT pk_dict_kategorie PRIMARY KEY,
+    Nazwa_Kategorii VARCHAR2(30)
+);
+CREATE TABLE Oddzialy (
+    ID_Oddzialu NUMBER CONSTRAINT pk_oddzialy PRIMARY KEY,
+    Nazwa VARCHAR2(100),
+    Miasto VARCHAR2(50),
+    Adres VARCHAR2(100)
+);
+
+CREATE TABLE Klienci (
+    ID_Klienta NUMBER CONSTRAINT pk_klienci PRIMARY KEY,
+    Imie VARCHAR2(50),
+    Nazwisko VARCHAR2(50),
+    PESEL CHAR(11) CONSTRAINT uq_klienci_pesel UNIQUE,
+    NIP CHAR(10),
+    Email VARCHAR2(100) CONSTRAINT uq_klienci_email UNIQUE,
+    Telefon VARCHAR2(15)
+);
+CREATE TABLE Modele_Konfiguracje (
+    ID_Modelu NUMBER CONSTRAINT pk_modele PRIMARY KEY,
+    ID_Kategorii NUMBER CONSTRAINT fk_modele_kategoria REFERENCES Dict_Kategorie(ID_Kategorii),
+    Marka VARCHAR2(50),
+    Model VARCHAR2(50),
+    Silnik VARCHAR2(50)
+);
+
+CREATE TABLE Cenniki (
+    ID_Cennika NUMBER CONSTRAINT pk_cenniki PRIMARY KEY,
+    ID_Kategorii NUMBER CONSTRAINT fk_cenniki_kategoria REFERENCES Dict_Kategorie(ID_Kategorii),
+    Cena_Doba NUMBER(10,2),
+    Obowiazuje_Od DATE,
+    Obowiazuje_Do DATE
+);
+
+CREATE TABLE Pracownicy (
+    ID_Pracownika NUMBER CONSTRAINT pk_pracownicy PRIMARY KEY,
+    ID_Oddzialu NUMBER CONSTRAINT fk_pracownicy_oddzial REFERENCES Oddzialy(ID_Oddzialu),
+    Imie VARCHAR2(50),
+    Nazwisko VARCHAR2(50),
+    Rola VARCHAR2(30)
+);
+CREATE TABLE Samochody (
+    ID_Samochodu NUMBER CONSTRAINT pk_samochody PRIMARY KEY,
+    ID_Modelu NUMBER CONSTRAINT fk_samochody_model REFERENCES Modele_Konfiguracje(ID_Modelu),
+    ID_Statusu NUMBER CONSTRAINT fk_samochody_status REFERENCES Dict_Statusy_Pojazdu(ID_Statusu),
+    ID_Oddzialu NUMBER CONSTRAINT fk_samochody_oddzial REFERENCES Oddzialy(ID_Oddzialu),
+    VIN CHAR(17) CONSTRAINT uq_samochody_vin UNIQUE,
+    Nr_Rejestracyjny VARCHAR2(10) CONSTRAINT uq_samochody_rej UNIQUE,
+    Przebieg NUMBER
+);
+CREATE TABLE Wypozyczenia (
+    ID_Wypozyczenia NUMBER CONSTRAINT pk_wypozyczenia PRIMARY KEY,
+    ID_Klienta NUMBER CONSTRAINT fk_wypozyczenia_klient REFERENCES Klienci(ID_Klienta),
+    ID_Samochodu NUMBER CONSTRAINT fk_wypozyczenia_samochod REFERENCES Samochody(ID_Samochodu),
+    ID_Pracownika_Wydajacego NUMBER CONSTRAINT fk_wypozyczenia_prac_wyd REFERENCES Pracownicy(ID_Pracownika),
+    ID_Pracownika_Odbierajacego NUMBER CONSTRAINT fk_wypozyczenia_prac_odb REFERENCES Pracownicy(ID_Pracownika),
+    Data_Wypozyczenia TIMESTAMP,
+    Data_Zwrotu_Planowana TIMESTAMP,
+    Data_Zwrotu_Rzeczywista TIMESTAMP,
+    Status VARCHAR2(20)
+);
+
+CREATE TABLE Historia_Logi_Pojazdu (
+    ID_Logu NUMBER CONSTRAINT pk_historia_logi PRIMARY KEY,
+    ID_Samochodu NUMBER CONSTRAINT fk_logi_samochod REFERENCES Samochody(ID_Samochodu),
+    ID_Pracownika NUMBER CONSTRAINT fk_logi_pracownik REFERENCES Pracownicy(ID_Pracownika),
+    Data_Zmiany TIMESTAMP,
+    Stary_Status NUMBER, 
+    Nowy_Status NUMBER 
+);
+
+CREATE TABLE Faktury (
+    ID_Faktury NUMBER CONSTRAINT pk_faktury PRIMARY KEY,
+    ID_Wypozyczenia NUMBER CONSTRAINT uq_faktury_wypozyczenie UNIQUE CONSTRAINT fk_faktury_wypozyczenie REFERENCES Wypozyczenia(ID_Wypozyczenia),
+    Data_Wystawienia DATE,
+    Kwota_Netto NUMBER(10,2),
+    Kwota_Brutto NUMBER(10,2),
+    Status_Platnosci VARCHAR2(20)
+);
+CREATE TABLE Wypozyczenia_Archive (
+    ID_Wypozyczenia NUMBER CONSTRAINT pk_wypozyczenia_arch PRIMARY KEY,
+    ID_Klienta NUMBER,
+    ID_Samochodu NUMBER,
+    ID_Pracownika_Wydajacego NUMBER,
+    ID_Pracownika_Odbierajacego NUMBER,
+    Data_Wypozyczenia TIMESTAMP,
+    Data_Zwrotu_Planowana TIMESTAMP,
+    Data_Zwrotu_Rzeczywista TIMESTAMP,
+    Status VARCHAR2(20),
+    Data_Archiwizacji TIMESTAMP
+);
+
+CREATE TABLE Historia_Logi_Archive (
+    ID_Logu NUMBER CONSTRAINT pk_historia_logi_arch PRIMARY KEY,
+    ID_Samochodu NUMBER,
+    ID_Pracownika NUMBER,
+    Data_Zmiany TIMESTAMP,
+    Stary_Status NUMBER,
+    Nowy_Status NUMBER,
+    Data_Archiwizacji TIMESTAMP
+);
+
+CREATE TABLE Faktury_Archive (
+    ID_Faktury NUMBER CONSTRAINT pk_faktury_arch PRIMARY KEY,
+    ID_Wypozyczenia NUMBER,
+    Data_Wystawienia DATE,
+    Kwota_Netto NUMBER(10,2),
+    Kwota_Brutto NUMBER(10,2),
+    Status_Platnosci VARCHAR2(20),
+    Data_Archiwizacji TIMESTAMP
+);
