@@ -394,4 +394,549 @@ INSERT INTO Klienci(Imie, Nazwisko, PESEL, Email, Telefon)
   VALUES('Tomasz','Wiśniewski','88060667890','tomasz.w@gmail.com','502300400');
 
 COMMIT;
+//////////procedury i funkcje//////////////////
+CREATE OR REPLACE FUNCTION ObliczKoszt(p_id_wypozyczenia IN NUMBER) 
+RETURN NUMBER AS
+  v_dni        NUMBER;
+  v_cena_doba  NUMBER;
+  v_koszt      NUMBER;
+BEGIN
+  SELECT 
+    CEIL(CAST(w.Data_Zwrotu_Rzeczywista AS DATE) - 
+         CAST(w.Data_Wypozyczenia AS DATE)),
+    c.Cena_Doba
+  INTO v_dni, v_cena_doba
+  FROM Wypozyczenia w
+  JOIN Samochody s ON w.ID_Samochodu = s.ID_Samochodu
+  JOIN Modele_Konfiguracje m ON s.ID_Modelu = m.ID_Modelu
+  JOIN Cenniki c ON m.ID_Kategorii = c.ID_Kategorii
+  WHERE w.ID_Wypozyczenia = p_id_wypozyczenia
+    AND (c.Obowiazuje_Do IS NULL OR c.Obowiazuje_Do >= SYSDATE);
+
+  v_koszt := v_dni * v_cena_doba;
+  RETURN v_koszt;
+END;
+/
+CREATE OR REPLACE PROCEDURE WydajPojazd(
+  p_id_wypozyczenia   IN NUMBER,
+  p_id_pracownika     IN NUMBER
+) AS
+  v_status VARCHAR2(20);
+BEGIN
+  -- Sprawdź czy rezerwacja istnieje i ma status Rezerwacja
+  SELECT Status INTO v_status
+  FROM Wypozyczenia
+  WHERE ID_Wypozyczenia = p_id_wypozyczenia;
+
+  IF v_status != 'Rezerwacja' THEN
+    RAISE_APPLICATION_ERROR(-20004, 
+      'Wypozyczenie nie ma statusu Rezerwacja. Aktualny status: ' || v_status);
+  END IF;
+
+  -- Zaktualizuj wypożyczenie
+  UPDATE Wypozyczenia SET
+    Status = 'Aktywne',
+    Data_Wypozyczenia = SYSTIMESTAMP,
+    ID_Pracownika_Wydajacego = p_id_pracownika
+  WHERE ID_Wypozyczenia = p_id_wypozyczenia;
+
+  COMMIT;
+
+EXCEPTION
+  WHEN NO_DATA_FOUND THEN
+    RAISE_APPLICATION_ERROR(-20005, 'Nie znaleziono wypozyczenia o podanym ID.');
+  WHEN OTHERS THEN
+    ROLLBACK;
+    RAISE;
+END;
+/
+///////////////////
+CREATE OR REPLACE PROCEDURE ZwrocPojazd(
+  p_id_wypozyczenia   IN NUMBER,
+  p_id_pracownika     IN NUMBER,
+  p_przebieg_konc     IN NUMBER
+) AS
+  v_status        VARCHAR2(20);
+  v_id_samochodu  NUMBER;
+  v_koszt_netto   NUMBER;
+  v_koszt_brutto  NUMBER;
+BEGIN
+  -- Sprawdź czy wypożyczenie istnieje i ma status Aktywne
+  SELECT Status, ID_Samochodu 
+  INTO v_status, v_id_samochodu
+  FROM Wypozyczenia
+  WHERE ID_Wypozyczenia = p_id_wypozyczenia;
+
+  IF v_status != 'Aktywne' THEN
+    RAISE_APPLICATION_ERROR(-20006,
+      'Wypozyczenie nie ma statusu Aktywne. Aktualny status: ' || v_status);
+  END IF;
+
+  -- Zaktualizuj wypożyczenie
+  UPDATE Wypozyczenia SET
+    Status = 'Zakonczone',
+    Data_Zwrotu_Rzeczywista = SYSTIMESTAMP,
+    ID_Pracownika_Odbierajacego = p_id_pracownika
+  WHERE ID_Wypozyczenia = p_id_wypozyczenia;
+
+  -- Zaktualizuj przebieg samochodu
+  UPDATE Samochody SET
+    Przebieg = p_przebieg_konc,
+    ID_Statusu = 1
+  WHERE ID_Samochodu = v_id_samochodu;
+
+  -- Oblicz koszt
+  v_koszt_netto  := ObliczKoszt(p_id_wypozyczenia);
+  v_koszt_brutto := ROUND(v_koszt_netto * 1.23, 2);
+
+  -- Wystaw fakturę automatycznie
+  INSERT INTO Faktury(
+    ID_Wypozyczenia,
+    Data_Wystawienia,
+    Kwota_Netto,
+    Kwota_Brutto,
+    Status_Platnosci
+  ) VALUES (
+    p_id_wypozyczenia,
+    SYSDATE,
+    v_koszt_netto,
+    v_koszt_brutto,
+    'Oczekuje'
+  );
+
+  COMMIT;
+
+EXCEPTION
+  WHEN NO_DATA_FOUND THEN
+    RAISE_APPLICATION_ERROR(-20007, 'Nie znaleziono wypozyczenia o podanym ID.');
+  WHEN OTHERS THEN
+    ROLLBACK;
+    RAISE;
+END;
+/
+///////////////////////////
+CREATE OR REPLACE PROCEDURE GenerujRaportMiesięczny(
+  p_rok    IN NUMBER,
+  p_miesiac IN NUMBER
+) AS
+  v_liczba_wypozyczen  NUMBER;
+  v_przychod_netto     NUMBER;
+  v_przychod_brutto    NUMBER;
+  v_liczba_niezaplaconych NUMBER;
+
+  CURSOR c_niezaplacone IS
+    SELECT f.ID_Faktury, k.Imie, k.Nazwisko, k.Email,
+           f.Kwota_Brutto, f.Data_Wystawienia
+    FROM Faktury f
+    JOIN Wypozyczenia w ON f.ID_Wypozyczenia = w.ID_Wypozyczenia
+    JOIN Klienci k ON w.ID_Klienta = k.ID_Klienta
+    WHERE f.Status_Platnosci != 'Oplacona'
+      AND EXTRACT(YEAR FROM f.Data_Wystawienia)  = p_rok
+      AND EXTRACT(MONTH FROM f.Data_Wystawienia) = p_miesiac;
+
+BEGIN
+  -- Podsumowanie wypożyczeń
+  SELECT 
+    COUNT(*),
+    NVL(SUM(f.Kwota_Netto), 0),
+    NVL(SUM(f.Kwota_Brutto), 0)
+  INTO v_liczba_wypozyczen, v_przychod_netto, v_przychod_brutto
+  FROM Wypozyczenia w
+  JOIN Faktury f ON w.ID_Wypozyczenia = f.ID_Wypozyczenia
+  WHERE EXTRACT(YEAR FROM w.Data_Zwrotu_Rzeczywista)  = p_rok
+    AND EXTRACT(MONTH FROM w.Data_Zwrotu_Rzeczywista) = p_miesiac
+    AND w.Status = 'Zakonczone';
+
+  -- Wypisz nagłówek raportu
+  DBMS_OUTPUT.PUT_LINE('========================================');
+  DBMS_OUTPUT.PUT_LINE('RAPORT MIESIĘCZNY: ' || p_miesiac || '/' || p_rok);
+  DBMS_OUTPUT.PUT_LINE('========================================');
+  DBMS_OUTPUT.PUT_LINE('Liczba zrealizowanych wypożyczeń: ' || v_liczba_wypozyczen);
+  DBMS_OUTPUT.PUT_LINE('Przychód netto:   ' || v_przychod_netto  || ' PLN');
+  DBMS_OUTPUT.PUT_LINE('Przychód brutto:  ' || v_przychod_brutto || ' PLN');
+  DBMS_OUTPUT.PUT_LINE('----------------------------------------');
+  DBMS_OUTPUT.PUT_LINE('NIEZAPŁACONE FAKTURY:');
+
+  -- Wypisz niezapłacone faktury
+  v_liczba_niezaplaconych := 0;
+  FOR rec IN c_niezaplacone LOOP
+    v_liczba_niezaplaconych := v_liczba_niezaplaconych + 1;
+    DBMS_OUTPUT.PUT_LINE(
+      'Faktura #' || rec.ID_Faktury ||
+      ' | ' || rec.Imie || ' ' || rec.Nazwisko ||
+      ' | ' || rec.Email ||
+      ' | ' || rec.Kwota_Brutto || ' PLN' ||
+      ' | Wystawiona: ' || TO_CHAR(rec.Data_Wystawienia, 'DD-MM-YYYY')
+    );
+  END LOOP;
+
+  DBMS_OUTPUT.PUT_LINE('Łączna liczba niezapłaconych: ' || v_liczba_niezaplaconych);
+  DBMS_OUTPUT.PUT_LINE('========================================');
+END;
+/
+/////////////widoki///////////////
+CREATE OR REPLACE VIEW v_dostepne_auta AS
+SELECT 
+  s.ID_Samochodu,
+  m.Marka,
+  m.Model,
+  m.Silnik,
+  m.Sila,
+  s.Nr_Rejestracyjny,
+  s.Przebieg,
+  o.Miasto,
+  o.Nazwa AS Oddzial,
+  k.Nazwa_Kategorii AS Kategoria,
+  c.Cena_Doba
+FROM Samochody s
+JOIN Modele_Konfiguracje m ON s.ID_Modelu = m.ID_Modelu
+JOIN Dict_Statusy_Pojazdu ds ON s.ID_Statusu = ds.ID_Statusu
+JOIN Oddzialy o ON s.ID_Oddzialu = o.ID_Oddzialu
+JOIN Dict_Kategorie k ON m.ID_Kategorii = k.ID_Kategorii
+JOIN Cenniki c ON m.ID_Kategorii = c.ID_Kategorii
+WHERE ds.Nazwa_Statusu = 'Dostepny'
+  AND (c.Obowiazuje_Do IS NULL OR c.Obowiazuje_Do >= SYSDATE);
+/
+
+CREATE OR REPLACE VIEW v_historia_wynajmow AS
+SELECT
+  w.ID_Wypozyczenia,
+  k.Imie || ' ' || k.Nazwisko AS Klient,
+  k.Email,
+  m.Marka || ' ' || m.Model AS Pojazd,
+  s.Nr_Rejestracyjny,
+  w.Data_Wypozyczenia,
+  w.Data_Zwrotu_Planowana,
+  w.Data_Zwrotu_Rzeczywista,
+  w.Status,
+  f.Kwota_Netto,
+  f.Kwota_Brutto,
+  f.Status_Platnosci
+FROM Wypozyczenia w
+JOIN Klienci k ON w.ID_Klienta = k.ID_Klienta
+JOIN Samochody s ON w.ID_Samochodu = s.ID_Samochodu
+JOIN Modele_Konfiguracje m ON s.ID_Modelu = m.ID_Modelu
+LEFT JOIN Faktury f ON w.ID_Wypozyczenia = f.ID_Wypozyczenia;
+/
+//////////////////grants/////////
+-- db_datareader - uprawnienia do odczytu
+GRANT SELECT ON Dict_Kategorie TO db_datareader;
+GRANT SELECT ON Dict_Statusy_Pojazdu TO db_datareader;
+GRANT SELECT ON Oddzialy TO db_datareader;
+GRANT SELECT ON Modele_Konfiguracje TO db_datareader;
+GRANT SELECT ON Cenniki TO db_datareader;
+GRANT SELECT ON Pracownicy TO db_datareader;
+GRANT SELECT ON Samochody TO db_datareader;
+GRANT SELECT ON Klienci TO db_datareader;
+GRANT SELECT ON Wypozyczenia TO db_datareader;
+GRANT SELECT ON Faktury TO db_datareader;
+GRANT SELECT ON Historia_Logi_Pojazdu TO db_datareader;
+GRANT SELECT ON v_dostepne_auta TO db_datareader;
+GRANT SELECT ON v_historia_wynajmow TO db_datareader;
+
+-- db_datawriter - uprawnienia do zapisu
+GRANT INSERT, UPDATE, DELETE ON Klienci TO db_datawriter;
+GRANT INSERT, UPDATE, DELETE ON Wypozyczenia TO db_datawriter;
+GRANT INSERT, UPDATE, DELETE ON Samochody TO db_datawriter;
+GRANT INSERT, UPDATE, DELETE ON Faktury TO db_datawriter;
+GRANT INSERT, UPDATE, DELETE ON Pracownicy TO db_datawriter;
+GRANT INSERT, UPDATE, DELETE ON Oddzialy TO db_datawriter;
+GRANT INSERT, UPDATE, DELETE ON Modele_Konfiguracje TO db_datawriter;
+GRANT INSERT, UPDATE, DELETE ON Cenniki TO db_datawriter;
+
+-- db_procexecutor - uprawnienia do procedur i funkcji
+GRANT EXECUTE ON RezerwujPojazd TO db_procexecutor;
+GRANT EXECUTE ON WydajPojazd TO db_procexecutor;
+GRANT EXECUTE ON ZwrocPojazd TO db_procexecutor;
+GRANT EXECUTE ON ObliczKoszt TO db_procexecutor;
+GRANT EXECUTE ON GenerujRaportMiesięczny TO db_procexecutor;
+/////////////////////////////
+SPRAWDZ CZY WSZYSTKO DZIAŁA:
+///////////////////////////////
+SELECT * FROM v_dostepne_auta;
+/
+DECLARE
+  v_id_wyp NUMBER;
+BEGIN
+  RezerwujPojazd(
+    p_id_klienta   => 1,
+    p_id_samochodu => 1,
+    p_data_od      => SYSDATE,
+    p_data_do      => SYSDATE + 3,
+    p_id_wyp       => v_id_wyp
+  );
+  DBMS_OUTPUT.PUT_LINE('Utworzono rezerwację ID: ' || v_id_wyp);
+END;
+/
+SELECT s.Nr_Rejestracyjny, ds.Nazwa_Statusu
+FROM Samochody s
+JOIN Dict_Statusy_Pojazdu ds ON s.ID_Statusu = ds.ID_Statusu
+WHERE s.ID_Samochodu = 1;
+/
+SELECT * FROM Historia_Logi_Pojazdu WHERE ID_Samochodu = 1;
+/
+BEGIN
+  WydajPojazd(
+    p_id_wypozyczenia => 1,
+    p_id_pracownika   => 1
+  );
+  DBMS_OUTPUT.PUT_LINE('Pojazd wydany.');
+END;
+/
+SELECT ID_Wypozyczenia, Status, Data_Wypozyczenia 
+FROM Wypozyczenia WHERE ID_Wypozyczenia = 1;
+/
+BEGIN
+  ZwrocPojazd(
+    p_id_wypozyczenia => 1,
+    p_id_pracownika   => 2,
+    p_przebieg_konc   => 45300
+  );
+  DBMS_OUTPUT.PUT_LINE('Pojazd zwrócony.');
+END;
+/
+SELECT * FROM Faktury WHERE ID_Wypozyczenia = 1;
+/
+SELECT * FROM v_historia_wynajmow;
+//////////////////////grupowanie procedur i funkcji w jeden obiekt./////////
+CREATE OR REPLACE PACKAGE pkg_wypozyczalnia AS
+  PROCEDURE RezerwujPojazd(
+    p_id_klienta   IN NUMBER,
+    p_id_samochodu IN NUMBER,
+    p_data_od      IN DATE,
+    p_data_do      IN DATE,
+    p_id_wyp       OUT NUMBER
+  );
+  PROCEDURE WydajPojazd(
+    p_id_wypozyczenia IN NUMBER,
+    p_id_pracownika   IN NUMBER
+  );
+  PROCEDURE ZwrocPojazd(
+    p_id_wypozyczenia IN NUMBER,
+    p_id_pracownika   IN NUMBER,
+    p_przebieg_konc   IN NUMBER
+  );
+  FUNCTION ObliczKoszt(
+    p_id_wypozyczenia IN NUMBER
+  ) RETURN NUMBER;
+  PROCEDURE GenerujRaportMiesięczny(
+    p_rok     IN NUMBER,
+    p_miesiac IN NUMBER
+  );
+END pkg_wypozyczalnia;
+/
+
+CREATE OR REPLACE PACKAGE BODY pkg_wypozyczalnia AS
+
+  PROCEDURE RezerwujPojazd(
+    p_id_klienta   IN NUMBER,
+    p_id_samochodu IN NUMBER,
+    p_data_od      IN DATE,
+    p_data_do      IN DATE,
+    p_id_wyp       OUT NUMBER
+  ) AS
+    v_status_dostepny  NUMBER;
+    v_status_samochodu NUMBER;
+    v_check            NUMBER;
+  BEGIN
+    SELECT ID_Statusu INTO v_status_samochodu
+    FROM Samochody WHERE ID_Samochodu = p_id_samochodu;
+
+    SELECT ID_Statusu INTO v_status_dostepny
+    FROM Dict_Statusy_Pojazdu WHERE Nazwa_Statusu = 'Dostepny';
+
+    IF v_status_samochodu != v_status_dostepny THEN
+      RAISE_APPLICATION_ERROR(-20001, 'Pojazd nie jest dostepny do rezerwacji.');
+    END IF;
+
+    SELECT COUNT(*) INTO v_check FROM Klienci WHERE ID_Klienta = p_id_klienta;
+    IF v_check = 0 THEN
+      RAISE_APPLICATION_ERROR(-20002, 'Klient o podanym ID nie istnieje.');
+    END IF;
+
+    INSERT INTO Wypozyczenia(
+      ID_Klienta, ID_Samochodu, Data_Zwrotu_Planowana, Status
+    ) VALUES (
+      p_id_klienta, p_id_samochodu, p_data_do, 'Rezerwacja'
+    ) RETURNING ID_Wypozyczenia INTO p_id_wyp;
+
+    UPDATE Samochody SET ID_Statusu = 2 WHERE ID_Samochodu = p_id_samochodu;
+    COMMIT;
+  EXCEPTION
+    WHEN NO_DATA_FOUND THEN
+      RAISE_APPLICATION_ERROR(-20003, 'Nie znaleziono pojazdu o podanym ID.');
+    WHEN OTHERS THEN ROLLBACK; RAISE;
+  END RezerwujPojazd;
+
+  PROCEDURE WydajPojazd(
+    p_id_wypozyczenia IN NUMBER,
+    p_id_pracownika   IN NUMBER
+  ) AS
+    v_status VARCHAR2(20);
+  BEGIN
+    SELECT Status INTO v_status
+    FROM Wypozyczenia WHERE ID_Wypozyczenia = p_id_wypozyczenia;
+
+    IF v_status != 'Rezerwacja' THEN
+      RAISE_APPLICATION_ERROR(-20004,
+        'Wypozyczenie nie ma statusu Rezerwacja. Aktualny status: ' || v_status);
+    END IF;
+
+    UPDATE Wypozyczenia SET
+      Status = 'Aktywne',
+      Data_Wypozyczenia = SYSTIMESTAMP,
+      ID_Pracownika_Wydajacego = p_id_pracownika
+    WHERE ID_Wypozyczenia = p_id_wypozyczenia;
+    COMMIT;
+  EXCEPTION
+    WHEN NO_DATA_FOUND THEN
+      RAISE_APPLICATION_ERROR(-20005, 'Nie znaleziono wypozyczenia o podanym ID.');
+    WHEN OTHERS THEN ROLLBACK; RAISE;
+  END WydajPojazd;
+
+  PROCEDURE ZwrocPojazd(
+    p_id_wypozyczenia IN NUMBER,
+    p_id_pracownika   IN NUMBER,
+    p_przebieg_konc   IN NUMBER
+  ) AS
+    v_status       VARCHAR2(20);
+    v_id_samochodu NUMBER;
+    v_koszt_netto  NUMBER;
+    v_koszt_brutto NUMBER;
+  BEGIN
+    SELECT Status, ID_Samochodu INTO v_status, v_id_samochodu
+    FROM Wypozyczenia WHERE ID_Wypozyczenia = p_id_wypozyczenia;
+
+    IF v_status != 'Aktywne' THEN
+      RAISE_APPLICATION_ERROR(-20006,
+        'Wypozyczenie nie ma statusu Aktywne. Aktualny status: ' || v_status);
+    END IF;
+
+    UPDATE Wypozyczenia SET
+      Status = 'Zakonczone',
+      Data_Zwrotu_Rzeczywista = SYSTIMESTAMP,
+      ID_Pracownika_Odbierajacego = p_id_pracownika
+    WHERE ID_Wypozyczenia = p_id_wypozyczenia;
+
+    UPDATE Samochody SET
+      Przebieg = p_przebieg_konc, ID_Statusu = 1
+    WHERE ID_Samochodu = v_id_samochodu;
+
+    v_koszt_netto  := ObliczKoszt(p_id_wypozyczenia);
+    v_koszt_brutto := ROUND(v_koszt_netto * 1.23, 2);
+
+    INSERT INTO Faktury(
+      ID_Wypozyczenia, Data_Wystawienia,
+      Kwota_Netto, Kwota_Brutto, Status_Platnosci
+    ) VALUES (
+      p_id_wypozyczenia, SYSDATE,
+      v_koszt_netto, v_koszt_brutto, 'Oczekuje'
+    );
+    COMMIT;
+  EXCEPTION
+    WHEN NO_DATA_FOUND THEN
+      RAISE_APPLICATION_ERROR(-20007, 'Nie znaleziono wypozyczenia o podanym ID.');
+    WHEN OTHERS THEN ROLLBACK; RAISE;
+  END ZwrocPojazd;
+
+  FUNCTION ObliczKoszt(p_id_wypozyczenia IN NUMBER) RETURN NUMBER AS
+    v_dni       NUMBER;
+    v_cena_doba NUMBER;
+  BEGIN
+    SELECT
+      CEIL(CAST(w.Data_Zwrotu_Rzeczywista AS DATE) -
+           CAST(w.Data_Wypozyczenia AS DATE)),
+      c.Cena_Doba
+    INTO v_dni, v_cena_doba
+    FROM Wypozyczenia w
+    JOIN Samochody s ON w.ID_Samochodu = s.ID_Samochodu
+    JOIN Modele_Konfiguracje m ON s.ID_Modelu = m.ID_Modelu
+    JOIN Cenniki c ON m.ID_Kategorii = c.ID_Kategorii
+    WHERE w.ID_Wypozyczenia = p_id_wypozyczenia
+      AND (c.Obowiazuje_Do IS NULL OR c.Obowiazuje_Do >= SYSDATE);
+    RETURN v_dni * v_cena_doba;
+  EXCEPTION
+    WHEN NO_DATA_FOUND THEN
+      RAISE_APPLICATION_ERROR(-20008, 'Nie znaleziono danych do obliczenia kosztu.');
+  END ObliczKoszt;
+
+  PROCEDURE GenerujRaportMiesięczny(
+    p_rok     IN NUMBER,
+    p_miesiac IN NUMBER
+  ) AS
+    v_liczba_wypozyczen     NUMBER;
+    v_przychod_netto        NUMBER;
+    v_przychod_brutto       NUMBER;
+    v_liczba_niezaplaconych NUMBER;
+    CURSOR c_niezaplacone IS
+      SELECT f.ID_Faktury, k.Imie, k.Nazwisko, k.Email,
+             f.Kwota_Brutto, f.Data_Wystawienia
+      FROM Faktury f
+      JOIN Wypozyczenia w ON f.ID_Wypozyczenia = w.ID_Wypozyczenia
+      JOIN Klienci k ON w.ID_Klienta = k.ID_Klienta
+      WHERE f.Status_Platnosci != 'Oplacona'
+        AND EXTRACT(YEAR  FROM f.Data_Wystawienia) = p_rok
+        AND EXTRACT(MONTH FROM f.Data_Wystawienia) = p_miesiac;
+  BEGIN
+    SELECT COUNT(*), NVL(SUM(f.Kwota_Netto),0), NVL(SUM(f.Kwota_Brutto),0)
+    INTO v_liczba_wypozyczen, v_przychod_netto, v_przychod_brutto
+    FROM Wypozyczenia w
+    JOIN Faktury f ON w.ID_Wypozyczenia = f.ID_Wypozyczenia
+    WHERE EXTRACT(YEAR  FROM w.Data_Zwrotu_Rzeczywista) = p_rok
+      AND EXTRACT(MONTH FROM w.Data_Zwrotu_Rzeczywista) = p_miesiac
+      AND w.Status = 'Zakonczone';
+
+    DBMS_OUTPUT.PUT_LINE('========================================');
+    DBMS_OUTPUT.PUT_LINE('RAPORT MIESIĘCZNY: ' || p_miesiac || '/' || p_rok);
+    DBMS_OUTPUT.PUT_LINE('========================================');
+    DBMS_OUTPUT.PUT_LINE('Liczba wypożyczeń: ' || v_liczba_wypozyczen);
+    DBMS_OUTPUT.PUT_LINE('Przychód netto:    ' || v_przychod_netto  || ' PLN');
+    DBMS_OUTPUT.PUT_LINE('Przychód brutto:   ' || v_przychod_brutto || ' PLN');
+    DBMS_OUTPUT.PUT_LINE('----------------------------------------');
+    DBMS_OUTPUT.PUT_LINE('NIEZAPŁACONE FAKTURY:');
+
+    v_liczba_niezaplaconych := 0;
+    FOR rec IN c_niezaplacone LOOP
+      v_liczba_niezaplaconych := v_liczba_niezaplaconych + 1;
+      DBMS_OUTPUT.PUT_LINE(
+        'Faktura #' || rec.ID_Faktury ||
+        ' | ' || rec.Imie || ' ' || rec.Nazwisko ||
+        ' | ' || rec.Kwota_Brutto || ' PLN' ||
+        ' | ' || TO_CHAR(rec.Data_Wystawienia, 'DD-MM-YYYY')
+      );
+    END LOOP;
+    DBMS_OUTPUT.PUT_LINE('Niezapłaconych: ' || v_liczba_niezaplaconych);
+    DBMS_OUTPUT.PUT_LINE('========================================');
+  END GenerujRaportMiesięczny;
+
+END pkg_wypozyczalnia;
+/////////////////////////grant dla roli//////////
+RANT EXECUTE ON pkg_wypozyczalnia TO db_procexecutor;
+///////////////AUDYTY/////
+////////przełącz sie na tą gdzie user to system//////
+-- Włącz audyt dla kluczowych tabel
+AUDIT INSERT, UPDATE, DELETE ON wypozyczalnia_owner.Wypozyczenia BY SESSION;
+AUDIT INSERT, UPDATE, DELETE ON wypozyczalnia_owner.Faktury BY SESSION;
+AUDIT INSERT, UPDATE, DELETE ON wypozyczalnia_owner.Klienci BY SESSION;
+AUDIT INSERT, UPDATE, DELETE ON wypozyczalnia_owner.Samochody BY SESSION;
+
+-- Sprawdź czy audyt jest włączony
+SELECT OBJECT_NAME, ALT, AUD, COM, DEL, GRA, IND, INS, LOC, REN, SEL, UPD
+FROM DBA_OBJ_AUDIT_OPTS
+WHERE OWNER = 'WYPOZYCZALNIA_OWNER';
+
+SPRAWDZANIE LOGÓW AUDYTÓW:
+SELECT USERNAME, OBJ_NAME, ACTION_NAME, TIMESTAMP
+FROM DBA_AUDIT_TRAIL
+WHERE OWNER = 'WYPOZYCZALNIA_OWNER'
+ORDER BY TIMESTAMP DESC;
+
+////////////////dodanie emaili do wypozyczalnia_owner////////
+ALTER TABLE Pracownicy ADD Email VARCHAR2(100) UNIQUE;
+
+-- Dodaj emaile do istniejących pracowników
+UPDATE Pracownicy SET Email = 'michal.paczkowski@wypozyczalnia.pl' WHERE ID_Pracownika = 1;
+UPDATE Pracownicy SET Email = 'piotr.poletylo@wypozyczalnia.pl' WHERE ID_Pracownika = 2;
+UPDATE Pracownicy SET Email = 'anna.kowalska@wypozyczalnia.pl' WHERE ID_Pracownika = 3;
+COMMIT;
 
