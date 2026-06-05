@@ -1,0 +1,397 @@
+
+CREATE USER wypozyczalnia_owner IDENTIFIED BY OwnerSecure2026x
+  DEFAULT TABLESPACE USERS
+  TEMPORARY TABLESPACE TEMP
+  QUOTA UNLIMITED ON USERS;
+
+GRANT CONNECT, RESOURCE TO wypozyczalnia_owner;
+GRANT CREATE VIEW TO wypozyczalnia_owner;
+GRANT CREATE SEQUENCE TO wypozyczalnia_owner;
+GRANT CREATE TRIGGER TO wypozyczalnia_owner;
+GRANT CREATE PROCEDURE TO wypozyczalnia_owner;
+
+
+CREATE ROLE db_datareader;
+CREATE ROLE db_datawriter;
+CREATE ROLE db_procexecutor;
+
+
+-- Administrator aplikacyjny (NIE DBA całego serwera)
+CREATE USER admin_wypoz IDENTIFIED BY AdminSecure2026x;
+GRANT CONNECT, RESOURCE TO admin_wypoz;
+GRANT db_datareader, db_datawriter, db_procexecutor TO admin_wypoz;
+
+-- Backend .NET
+CREATE USER app_identity IDENTIFIED BY AppBackend2026x;
+GRANT CREATE SESSION TO app_identity;
+GRANT db_datareader, db_datawriter, db_procexecutor TO app_identity;
+
+-- Deweloperzy
+CREATE USER dev_michal IDENTIFIED BY DevMichal2026x;
+GRANT CREATE SESSION TO dev_michal;
+GRANT db_datareader TO dev_michal;
+
+CREATE USER dev_piotr IDENTIFIED BY DevPiotr2026x;
+GRANT CREATE SESSION TO dev_piotr;
+GRANT db_datareader TO dev_piotr;
+
+
+///////////////////////////////////////////////////////////////////
+Weryfikacja:
+SELECT username, account_status 
+FROM dba_users 
+WHERE username IN (
+  'WYPOZYCZALNIA_OWNER','ADMIN_WYPOZ',
+  'APP_IDENTITY','DEV_MICHAL','DEV_PIOTR'
+);
+Wszystkie muszą być open
+/////////////////
+zaloguj sie jako wypozyczalnia_owner czyli new connection username on i jego hasło
+/////////////////////
+-- Tabele słownikowe (pierwsze - bez FK)
+CREATE TABLE Dict_Kategorie (
+  ID_Kategorii  NUMBER PRIMARY KEY,
+  Nazwa_Kategorii VARCHAR2(30) NOT NULL
+);
+
+CREATE TABLE Dict_Statusy_Pojazdu (
+  ID_Statusu    NUMBER PRIMARY KEY,
+  Nazwa_Statusu VARCHAR2(30) NOT NULL
+);
+
+-- Dane słownikowe
+INSERT INTO Dict_Kategorie VALUES (1, 'Ekonomiczna');
+INSERT INTO Dict_Kategorie VALUES (2, 'Kompaktowa');
+INSERT INTO Dict_Kategorie VALUES (3, 'SUV');
+INSERT INTO Dict_Kategorie VALUES (4, 'Premium');
+
+INSERT INTO Dict_Statusy_Pojazdu VALUES (1, 'Dostepny');
+INSERT INTO Dict_Statusy_Pojazdu VALUES (2, 'Wynajety');
+INSERT INTO Dict_Statusy_Pojazdu VALUES (3, 'W serwisie');
+INSERT INTO Dict_Statusy_Pojazdu VALUES (4, 'Uszkodzony');
+
+COMMIT;
+/////////////
+CREATE TABLE Oddzialy (
+  ID_Oddzialu  NUMBER PRIMARY KEY,
+  Nazwa        VARCHAR2(100) NOT NULL,
+  Miasto       VARCHAR2(50)  NOT NULL,
+  Adres        VARCHAR2(100) NOT NULL
+);
+
+CREATE TABLE Modele_Konfiguracje (
+  ID_Modelu    NUMBER PRIMARY KEY,
+  ID_Kategorii NUMBER NOT NULL,
+  Marka        VARCHAR2(50) NOT NULL,
+  Model        VARCHAR2(50) NOT NULL,
+  Silnik       VARCHAR2(50),
+  Sila         VARCHAR2(20),
+  CONSTRAINT fk_model_kategoria 
+    FOREIGN KEY (ID_Kategorii) REFERENCES Dict_Kategorie(ID_Kategorii)
+);
+
+CREATE TABLE Cenniki (
+  ID_Cennika    NUMBER PRIMARY KEY,
+  ID_Kategorii  NUMBER NOT NULL,
+  Cena_Doba     NUMBER(10,2) NOT NULL,
+  Obowiazuje_Od DATE NOT NULL,
+  Obowiazuje_Do DATE,
+  CONSTRAINT fk_cennik_kategoria 
+    FOREIGN KEY (ID_Kategorii) REFERENCES Dict_Kategorie(ID_Kategorii)
+);
+
+CREATE TABLE Pracownicy (
+  ID_Pracownika NUMBER PRIMARY KEY,
+  ID_Oddzialu   NUMBER NOT NULL,
+  Imie          VARCHAR2(50) NOT NULL,
+  Nazwisko      VARCHAR2(50) NOT NULL,
+  PESEL         CHAR(11) UNIQUE,
+  Rola          VARCHAR2(30) NOT NULL,
+  CONSTRAINT chk_pracownik_rola 
+    CHECK (Rola IN ('Administrator','Agent','Ksiegowy')),
+  CONSTRAINT fk_pracownik_oddzial 
+    FOREIGN KEY (ID_Oddzialu) REFERENCES Oddzialy(ID_Oddzialu)
+);
+
+CREATE TABLE Samochody (
+  ID_Samochodu      NUMBER PRIMARY KEY,
+  ID_Modelu         NUMBER NOT NULL,
+  ID_Statusu        NUMBER NOT NULL,
+  ID_Oddzialu       NUMBER NOT NULL,
+  Nr_Rejestracyjny  VARCHAR2(10) UNIQUE NOT NULL,
+  VIN               CHAR(17) UNIQUE NOT NULL,
+  Przebieg          NUMBER DEFAULT 0,
+  CONSTRAINT fk_samochod_model 
+    FOREIGN KEY (ID_Modelu) REFERENCES Modele_Konfiguracje(ID_Modelu),
+  CONSTRAINT fk_samochod_status 
+    FOREIGN KEY (ID_Statusu) REFERENCES Dict_Statusy_Pojazdu(ID_Statusu),
+  CONSTRAINT fk_samochod_oddzial 
+    FOREIGN KEY (ID_Oddzialu) REFERENCES Oddzialy(ID_Oddzialu)
+);
+/////////////////
+CREATE TABLE Klienci (
+  ID_Klienta  NUMBER PRIMARY KEY,
+  Imie        VARCHAR2(50)  NOT NULL,
+  Nazwisko    VARCHAR2(50)  NOT NULL,
+  PESEL       CHAR(11)      UNIQUE,
+  NIP         CHAR(10),
+  Email       VARCHAR2(100) UNIQUE NOT NULL,
+  Telefon     VARCHAR2(15)
+);
+
+CREATE TABLE Wypozyczenia (
+  ID_Wypozyczenia           NUMBER PRIMARY KEY,
+  ID_Klienta                NUMBER NOT NULL,
+  ID_Samochodu              NUMBER NOT NULL,
+  ID_Pracownika_Wydajacego  NUMBER,
+  ID_Pracownika_Odbierajacego NUMBER,
+  Data_Wypozyczenia         TIMESTAMP,
+  Data_Zwrotu_Planowana     DATE NOT NULL,
+  Data_Zwrotu_Rzeczywista   TIMESTAMP,
+  Status                    VARCHAR2(20) NOT NULL,
+  CONSTRAINT chk_wyp_status 
+    CHECK (Status IN ('Rezerwacja','Aktywne','Zakonczone','Anulowane')),
+  CONSTRAINT fk_wyp_klient 
+    FOREIGN KEY (ID_Klienta) REFERENCES Klienci(ID_Klienta),
+  CONSTRAINT fk_wyp_samochod 
+    FOREIGN KEY (ID_Samochodu) REFERENCES Samochody(ID_Samochodu),
+  CONSTRAINT fk_wyp_pracownik_wyd 
+    FOREIGN KEY (ID_Pracownika_Wydajacego) REFERENCES Pracownicy(ID_Pracownika),
+  CONSTRAINT fk_wyp_pracownik_odb 
+    FOREIGN KEY (ID_Pracownika_Odbierajacego) REFERENCES Pracownicy(ID_Pracownika)
+);
+
+CREATE TABLE Faktury (
+  ID_Faktury       NUMBER PRIMARY KEY,
+  ID_Wypozyczenia  NUMBER UNIQUE NOT NULL,
+  Data_Wystawienia DATE NOT NULL,
+  Kwota_Netto      NUMBER(10,2),
+  Kwota_Brutto     NUMBER(10,2),
+  Status_Platnosci VARCHAR2(20) NOT NULL,
+  CONSTRAINT chk_faktura_status 
+    CHECK (Status_Platnosci IN ('Oczekuje','Oplacona','Zalegla')),
+  CONSTRAINT fk_faktura_wyp 
+    FOREIGN KEY (ID_Wypozyczenia) REFERENCES Wypozyczenia(ID_Wypozyczenia)
+);
+
+CREATE TABLE Historia_Logi_Pojazdu (
+  ID_Logu       NUMBER PRIMARY KEY,
+  ID_Samochodu  NUMBER NOT NULL,
+  ID_Pracownika NUMBER,
+  Data_Zmiany   TIMESTAMP DEFAULT SYSTIMESTAMP,
+  Stary_Status  NUMBER,
+  Nowy_Status   NUMBER NOT NULL,
+  CONSTRAINT fk_log_samochod 
+    FOREIGN KEY (ID_Samochodu) REFERENCES Samochody(ID_Samochodu),
+  CONSTRAINT fk_log_pracownik 
+    FOREIGN KEY (ID_Pracownika) REFERENCES Pracownicy(ID_Pracownika),
+  CONSTRAINT fk_log_stary_status 
+    FOREIGN KEY (Stary_Status) REFERENCES Dict_Statusy_Pojazdu(ID_Statusu),
+  CONSTRAINT fk_log_nowy_status 
+    FOREIGN KEY (Nowy_Status) REFERENCES Dict_Statusy_Pojazdu(ID_Statusu)
+);
+//////////////////////////////
+CREATE SEQUENCE seq_oddzialy        START WITH 1 INCREMENT BY 1 NOCACHE NOCYCLE;
+CREATE SEQUENCE seq_modele          START WITH 1 INCREMENT BY 1 NOCACHE NOCYCLE;
+CREATE SEQUENCE seq_cenniki         START WITH 1 INCREMENT BY 1 NOCACHE NOCYCLE;
+CREATE SEQUENCE seq_pracownicy      START WITH 1 INCREMENT BY 1 NOCACHE NOCYCLE;
+CREATE SEQUENCE seq_samochody       START WITH 1 INCREMENT BY 1 NOCACHE NOCYCLE;
+CREATE SEQUENCE seq_klienci         START WITH 1 INCREMENT BY 1 NOCACHE NOCYCLE;
+CREATE SEQUENCE seq_wypozyczenia    START WITH 1 INCREMENT BY 1 NOCACHE NOCYCLE;
+CREATE SEQUENCE seq_faktury         START WITH 1 INCREMENT BY 1 NOCACHE NOCYCLE;
+CREATE SEQUENCE seq_logi            START WITH 1 INCREMENT BY 1 NOCACHE NOCYCLE;
+CREATE SEQUENCE seq_dict_kategorie  START WITH 5 INCREMENT BY 1 NOCACHE NOCYCLE;
+
+/////////////////Sekwencje w Oracle to automatyczne liczniki — zastępują AUTO_INCREMENT//////////////////////////////
+//////////////WYZWALACZEodpalają się sami przed każdym INSERT.
+Działają tak:
+Ty piszesz:
+INSERT INTO Klienci(Imie, Nazwisko, Email) VALUES('Jan','Kowalski','jan@wp.pl');
+
+Oracle przed wykonaniem INSERT odpala trigger i uzupełnia:
+ID_Klienta = seq_klienci.NEXTVAL  → np. 1
+
+Wynik w bazie:
+ID=1, Imie='Jan', Nazwisko='Kowalski', Email='jan@wp.pl'///////////////////////////
+
+CREATE OR REPLACE TRIGGER trg_oddzialy_bi
+BEFORE INSERT ON Oddzialy FOR EACH ROW
+BEGIN
+  IF :NEW.ID_Oddzialu IS NULL THEN
+    :NEW.ID_Oddzialu := seq_oddzialy.NEXTVAL;
+  END IF;
+END;
+/
+
+CREATE OR REPLACE TRIGGER trg_modele_bi
+BEFORE INSERT ON Modele_Konfiguracje FOR EACH ROW
+BEGIN
+  IF :NEW.ID_Modelu IS NULL THEN
+    :NEW.ID_Modelu := seq_modele.NEXTVAL;
+  END IF;
+END;
+/
+
+CREATE OR REPLACE TRIGGER trg_cenniki_bi
+BEFORE INSERT ON Cenniki FOR EACH ROW
+BEGIN
+  IF :NEW.ID_Cennika IS NULL THEN
+    :NEW.ID_Cennika := seq_cenniki.NEXTVAL;
+  END IF;
+END;
+/
+
+CREATE OR REPLACE TRIGGER trg_pracownicy_bi
+BEFORE INSERT ON Pracownicy FOR EACH ROW
+BEGIN
+  IF :NEW.ID_Pracownika IS NULL THEN
+    :NEW.ID_Pracownika := seq_pracownicy.NEXTVAL;
+  END IF;
+END;
+/
+
+CREATE OR REPLACE TRIGGER trg_samochody_bi
+BEFORE INSERT ON Samochody FOR EACH ROW
+BEGIN
+  IF :NEW.ID_Samochodu IS NULL THEN
+    :NEW.ID_Samochodu := seq_samochody.NEXTVAL;
+  END IF;
+END;
+/
+
+CREATE OR REPLACE TRIGGER trg_klienci_bi
+BEFORE INSERT ON Klienci FOR EACH ROW
+BEGIN
+  IF :NEW.ID_Klienta IS NULL THEN
+    :NEW.ID_Klienta := seq_klienci.NEXTVAL;
+  END IF;
+END;
+/
+
+CREATE OR REPLACE TRIGGER trg_wypozyczenia_bi
+BEFORE INSERT ON Wypozyczenia FOR EACH ROW
+BEGIN
+  IF :NEW.ID_Wypozyczenia IS NULL THEN
+    :NEW.ID_Wypozyczenia := seq_wypozyczenia.NEXTVAL;
+  END IF;
+END;
+/
+
+CREATE OR REPLACE TRIGGER trg_faktury_bi
+BEFORE INSERT ON Faktury FOR EACH ROW
+BEGIN
+  IF :NEW.ID_Faktury IS NULL THEN
+    :NEW.ID_Faktury := seq_faktury.NEXTVAL;
+  END IF;
+END;
+/
+
+CREATE OR REPLACE TRIGGER trg_logi_bi
+BEFORE INSERT ON Historia_Logi_Pojazdu FOR EACH ROW
+BEGIN
+  IF :NEW.ID_Logu IS NULL THEN
+    :NEW.ID_Logu := seq_logi.NEXTVAL;
+  END IF;
+END;
+/
+////////////////////
+CREATE OR REPLACE TRIGGER trg_status_pojazdu_au
+AFTER UPDATE OF ID_Statusu ON Samochody FOR EACH ROW
+BEGIN
+  INSERT INTO Historia_Logi_Pojazdu (
+    ID_Logu,
+    ID_Samochodu,
+    ID_Pracownika,
+    Data_Zmiany,
+    Stary_Status,
+    Nowy_Status
+  ) VALUES (
+    seq_logi.NEXTVAL,
+    :OLD.ID_Samochodu,
+    NULL,
+    SYSTIMESTAMP,
+    :OLD.ID_Statusu,
+    :NEW.ID_Statusu
+  );
+END;
+/
+///////////////////////////////////
+CREATE INDEX idx_wypozyczenia_klient 
+  ON Wypozyczenia(ID_Klienta);
+
+CREATE INDEX idx_wypozyczenia_samochod 
+  ON Wypozyczenia(ID_Samochodu);
+
+CREATE INDEX idx_wypozyczenia_status 
+  ON Wypozyczenia(Status);
+
+CREATE INDEX idx_samochody_status 
+  ON Samochody(ID_Statusu);
+
+CREATE INDEX idx_samochody_oddzial 
+  ON Samochody(ID_Oddzialu);
+
+CREATE INDEX idx_faktury_wyp 
+  ON Faktury(ID_Wypozyczenia);
+
+CREATE INDEX idx_logi_samochod 
+  ON Historia_Logi_Pojazdu(ID_Samochodu);
+///////////////////////JESLI BEDZIE BŁĄD TO NIESZKODLIWY//////////////
+
+///////////////DANE TESTOWE/////////////////////////
+-- Oddziały
+INSERT INTO Oddzialy(Nazwa, Miasto, Adres) 
+  VALUES('Oddział Warszawa Centrum','Warszawa','ul. Marszałkowska 1');
+INSERT INTO Oddzialy(Nazwa, Miasto, Adres) 
+  VALUES('Oddział Kraków','Kraków','ul. Floriańska 15');
+INSERT INTO Oddzialy(Nazwa, Miasto, Adres) 
+  VALUES('Oddział Gdańsk','Gdańsk','ul. Długa 8');
+
+-- Modele
+INSERT INTO Modele_Konfiguracje(ID_Kategorii, Marka, Model, Silnik, Sila)
+  VALUES(1,'Toyota','Yaris','1.0 VVT-i','72KM');
+INSERT INTO Modele_Konfiguracje(ID_Kategorii, Marka, Model, Silnik, Sila)
+  VALUES(2,'Volkswagen','Golf','1.5 TSI','150KM');
+INSERT INTO Modele_Konfiguracje(ID_Kategorii, Marka, Model, Silnik, Sila)
+  VALUES(3,'Toyota','RAV4','2.0 D-4D','143KM');
+INSERT INTO Modele_Konfiguracje(ID_Kategorii, Marka, Model, Silnik, Sila)
+  VALUES(4,'BMW','5 Series','3.0 xDrive','340KM');
+
+-- Cenniki
+INSERT INTO Cenniki(ID_Kategorii, Cena_Doba, Obowiazuje_Od)
+  VALUES(1, 120.00, DATE '2026-01-01');
+INSERT INTO Cenniki(ID_Kategorii, Cena_Doba, Obowiazuje_Od)
+  VALUES(2, 180.00, DATE '2026-01-01');
+INSERT INTO Cenniki(ID_Kategorii, Cena_Doba, Obowiazuje_Od)
+  VALUES(3, 250.00, DATE '2026-01-01');
+INSERT INTO Cenniki(ID_Kategorii, Cena_Doba, Obowiazuje_Od)
+  VALUES(4, 450.00, DATE '2026-01-01');
+
+-- Pracownicy
+INSERT INTO Pracownicy(ID_Oddzialu, Imie, Nazwisko, PESEL, Rola)
+  VALUES(1,'Michał','Pączkowski','95010112345','Agent');
+INSERT INTO Pracownicy(ID_Oddzialu, Imie, Nazwisko, PESEL, Rola)
+  VALUES(1,'Piotr','Poletyło','96020223456','Administrator');
+INSERT INTO Pracownicy(ID_Oddzialu, Imie, Nazwisko, PESEL, Rola)
+  VALUES(2,'Anna','Kowalska','90030334567','Ksiegowy');
+
+-- Samochody
+INSERT INTO Samochody(ID_Modelu, ID_Statusu, ID_Oddzialu, Nr_Rejestracyjny, VIN, Przebieg)
+  VALUES(1, 1, 1,'WA12345','12345678901234567', 45000);
+INSERT INTO Samochody(ID_Modelu, ID_Statusu, ID_Oddzialu, Nr_Rejestracyjny, VIN, Przebieg)
+  VALUES(2, 1, 1,'WA67890','12345678901234568', 23000);
+INSERT INTO Samochody(ID_Modelu, ID_Statusu, ID_Oddzialu, Nr_Rejestracyjny, VIN, Przebieg)
+  VALUES(3, 1, 2,'KR11111','12345678901234569', 67000);
+INSERT INTO Samochody(ID_Modelu, ID_Statusu, ID_Oddzialu, Nr_Rejestracyjny, VIN, Przebieg)
+  VALUES(4, 1, 3,'GD22222','12345678901234570', 12000);
+
+-- Klienci
+INSERT INTO Klienci(Imie, Nazwisko, PESEL, Email, Telefon)
+  VALUES('Jan','Kowalski','85040445678','jan.kowalski@gmail.com','500100200');
+INSERT INTO Klienci(Imie, Nazwisko, PESEL, Email, Telefon)
+  VALUES('Anna','Nowak','90050556789','anna.nowak@gmail.com','501200300');
+INSERT INTO Klienci(Imie, Nazwisko, PESEL, Email, Telefon)
+  VALUES('Tomasz','Wiśniewski','88060667890','tomasz.w@gmail.com','502300400');
+
+COMMIT;
+
