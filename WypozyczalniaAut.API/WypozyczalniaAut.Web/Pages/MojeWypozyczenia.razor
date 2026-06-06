@@ -1,0 +1,150 @@
+@page "/moje-wypozyczenia"
+@inject HttpClient Http
+@inject AuthService Auth
+@inject NavigationManager Nav
+
+<div class="container mt-4">
+    <h2>Moje wypożyczenia</h2>
+
+    @if (!Auth.IsLoggedIn)
+    {
+        <div class="alert alert-warning">
+            Musisz być zalogowany. <a href="/login">Zaloguj się</a>
+        </div>
+    }
+    else if (ladowanie)
+    {
+        <div class="d-flex justify-content-center mt-5">
+            <div class="spinner-border text-primary" role="status"></div>
+        </div>
+    }
+    else if (historia == null || !historia.Any())
+    {
+        <div class="alert alert-info">Brak wypożyczeń na Twoim koncie.</div>
+    }
+    else
+    {
+        <div class="row mb-3">
+            <div class="col">
+                <span class="badge bg-primary me-2">Łącznie: @historia.Count</span>
+                <span class="badge bg-success me-2">Aktywne: @historia.Count(h => h.Status == "Aktywne")</span>
+                <span class="badge bg-warning text-dark">Rezerwacje: @historia.Count(h => h.Status == "Rezerwacja")</span>
+            </div>
+        </div>
+        <div class="table-responsive">
+            <table class="table table-striped table-hover align-middle">
+                <thead class="table-dark">
+                    <tr>
+                        <th>#</th>
+                        <th>Status</th>
+                        <th>Data wypożyczenia</th>
+                        <th>Planowany zwrot</th>
+                        <th>Rzeczywisty zwrot</th>
+                        <th>Kwota brutto</th>
+                        <th>Płatność</th>
+                        <th>Akcja</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    @foreach (var w in historia)
+                    {
+                        <tr>
+                            <td><strong>#@w.IdWypozyczenia</strong></td>
+                            <td><span class="badge @PobierzKlaseBadge(w.Status)">@w.Status</span></td>
+                            <td>@(w.DataWypozyczenia?.ToString("dd.MM.yyyy HH:mm") ?? "—")</td>
+                            <td>@w.DataZwrotuPlanowana.ToString("dd.MM.yyyy")</td>
+                            <td>@(w.DataZwrotuRzeczywista?.ToString("dd.MM.yyyy HH:mm") ?? "—")</td>
+                            <td>@(w.KwotaBrutto.HasValue ? w.KwotaBrutto.Value.ToString("F2") + " PLN" : "—")</td>
+                            <td>
+                                @if (w.StatusPlatnosci != null)
+                                {
+                                    <span class="badge @PobierzKlasePlatnosci(w.StatusPlatnosci)">
+                                        @w.StatusPlatnosci
+                                    </span>
+                                }
+                            </td>
+                            <td>
+                                @if (w.Status == "Rezerwacja")
+                                {
+                                    @if (potwierdzAnulowanie == w.IdWypozyczenia)
+                                    {
+                                        <div class="d-flex gap-1">
+                                            <button class="btn btn-sm btn-danger"
+                                                    @onclick="() => AnulujRezerwacje(w.IdWypozyczenia)">
+                                                ✓ Potwierdź
+                                            </button>
+                                            <button class="btn btn-sm btn-secondary"
+                                                    @onclick="() => potwierdzAnulowanie = 0">
+                                                Nie
+                                            </button>
+                                        </div>
+                                    }
+                                    else
+                                    {
+                                        <button class="btn btn-sm btn-outline-danger"
+                                                @onclick="() => potwierdzAnulowanie = w.IdWypozyczenia">
+                                            Anuluj
+                                        </button>
+                                    }
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    }
+</div>
+
+@code {
+    private List<Wypozyczenie>? historia;
+    private bool ladowanie = true;
+    private int potwierdzAnulowanie = 0;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (!Auth.IsLoggedIn) { ladowanie = false; return; }
+        historia = await Http.GetFromJsonAsync<List<Wypozyczenie>>(
+            $"api/Clients/{Auth.CurrentUser!.IdUzytkownika}/history");
+        ladowanie = false;
+    }
+
+    private async Task AnulujRezerwacje(int id)
+    {
+        var r = await Http.PostAsJsonAsync($"api/Rentals/{id}/cancel",
+            new { IdKlienta = Auth.CurrentUser!.IdUzytkownika });
+        potwierdzAnulowanie = 0;
+        if (r.IsSuccessStatusCode)
+            historia = await Http.GetFromJsonAsync<List<Wypozyczenie>>(
+                $"api/Clients/{Auth.CurrentUser!.IdUzytkownika}/history");
+    }
+
+    private string PobierzKlaseBadge(string status) => status switch
+    {
+        "Rezerwacja" => "bg-primary",
+        "Aktywne"    => "bg-success",
+        "Zakonczone" => "bg-secondary",
+        "Anulowane"  => "bg-danger",
+        _            => "bg-light text-dark"
+    };
+
+    private string PobierzKlasePlatnosci(string? status) => status switch
+    {
+        "Oplacona" => "bg-success",
+        "Oczekuje" => "bg-warning text-dark",
+        "Zalegla"  => "bg-danger",
+        _          => "bg-light text-dark"
+    };
+
+    public class Wypozyczenie
+    {
+        public int IdWypozyczenia { get; set; }
+        public string Status { get; set; } = string.Empty;
+        public DateTime? DataWypozyczenia { get; set; }
+        public DateTime DataZwrotuPlanowana { get; set; }
+        public DateTime? DataZwrotuRzeczywista { get; set; }
+        public decimal? KwotaNetto { get; set; }
+        public decimal? KwotaBrutto { get; set; }
+        public string? StatusPlatnosci { get; set; }
+    }
+}

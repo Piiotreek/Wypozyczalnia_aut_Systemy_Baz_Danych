@@ -1,0 +1,102 @@
+﻿@inject AuthService Auth
+@implements IDisposable
+
+<div class="top-row ps-3 navbar navbar-dark bg-dark">
+    <div class="container-fluid">
+        <a class="navbar-brand" href="">Wypożyczalnia Aut</a>
+        <button title="Navigation menu" class="navbar-toggler" @onclick="ToggleNavMenu">
+            <span class="navbar-toggler-icon"></span>
+        </button>
+    </div>
+</div>
+
+<div class="@NavMenuCssClass nav-scrollable" @onclick="ToggleNavMenu">
+    <nav class="flex-column">
+
+        @if (!Auth.IsLoggedIn)
+        {
+            <div class="nav-item px-3">
+                <NavLink class="nav-link" href="login">
+                    Zaloguj się
+                </NavLink>
+            </div>
+        }
+        else
+        {
+            <div class="px-3 py-2 text-white-50 small">
+                Zalogowany: <strong class="text-white">@Auth.CurrentUser!.Nazwa</strong><br/>
+                Rola: <span class="badge bg-secondary">@Auth.CurrentUser.Rola</span>
+            </div>
+            <hr class="text-white my-1"/>
+
+            @* Klient i wszyscy *@
+            <div class="nav-item px-3">
+                <NavLink class="nav-link" href="" Match="NavLinkMatch.All">
+                    Dostępne auta
+                </NavLink>
+            </div>
+
+            @if (Auth.HasRole("Klient"))
+            {
+                <div class="nav-item px-3">
+                    <NavLink class="nav-link" href="moje-wypozyczenia">
+                        Moje wypożyczenia
+                    </NavLink>
+                </div>
+            }
+
+            @if (Auth.HasRole("Agent", "Administrator"))
+            {
+                <hr class="text-white my-1"/>
+                <div class="px-3 text-white-50 small">PRACOWNIK</div>
+                <div class="nav-item px-3">
+                    <NavLink class="nav-link" href="panel-pracownika">
+                        Panel pracownika
+                    </NavLink>
+                </div>
+            }
+
+            @if (Auth.HasRole("Ksiegowy", "Administrator"))
+            {
+                <hr class="text-white my-1"/>
+                <div class="px-3 text-white-50 small">KSIĘGOWOŚĆ</div>
+                <div class="nav-item px-3">
+                    <NavLink class="nav-link" href="panel-ksiegowego">
+                        Panel księgowego
+                    </NavLink>
+                </div>
+            }
+
+            <hr class="text-white my-1"/>
+            <div class="nav-item px-3">
+                <button class="nav-link btn btn-link text-danger" @onclick="Wyloguj">
+                    Wyloguj się
+                </button>
+            </div>
+        }
+    </nav>
+</div>
+
+@code {
+    private bool collapseNavMenu = true;
+    private string? NavMenuCssClass => collapseNavMenu ? "collapse" : null;
+    private void ToggleNavMenu() => collapseNavMenu = !collapseNavMenu;
+
+    protected override void OnInitialized()
+    {
+        Auth.OnChange += StateHasChanged;
+    }
+
+    private void Wyloguj()
+    {
+        Auth.Logout();
+        Nav.NavigateTo("/login");
+    }
+
+    public void Dispose()
+    {
+        Auth.OnChange -= StateHasChanged;
+    }
+
+    [Inject] NavigationManager Nav { get; set; } = default!;
+}

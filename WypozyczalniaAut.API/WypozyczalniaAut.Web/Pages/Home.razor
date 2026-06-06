@@ -1,0 +1,206 @@
+﻿@page "/"
+@inject HttpClient Http
+@inject AuthService Auth
+@inject NavigationManager Nav
+
+<div class="container mt-4">
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <h2>Dostępne pojazdy</h2>
+        @if (!Auth.IsLoggedIn)
+        {
+            <a href="/login" class="btn btn-outline-primary">Zaloguj się aby rezerwować</a>
+        }
+    </div>
+
+    <div class="row mb-3">
+        <div class="col-md-4">
+            <input class="form-control" placeholder="Filtruj po mieście..."
+                   @bind="filtrMiasto" @bind:event="oninput" />
+        </div>
+    </div>
+
+    @if (auta == null)
+    {
+        <div class="d-flex justify-content-center mt-5">
+            <div class="spinner-border text-primary" role="status"></div>
+        </div>
+    }
+    else if (!auta.Any())
+    {
+        <div class="alert alert-warning">Brak dostępnych pojazdów.</div>
+    }
+    else
+    {
+        <div class="row">
+            @foreach (var auto in AutaFiltrowane)
+            {
+                <div class="col-md-4 mb-4">
+                    <div class="card h-100 shadow-sm">
+                        <div class="card-header bg-dark text-white">
+                            <h5 class="mb-0">@auto.Marka @auto.Model</h5>
+                            <small class="text-white-50">@auto.Silnik • @auto.Sila</small>
+                        </div>
+                        <div class="card-body">
+                            <table class="table table-sm table-borderless mb-0">
+                                <tr><td class="text-muted">Oddział</td><td><strong>@auto.Oddzial</strong></td></tr>
+                                <tr><td class="text-muted">Miasto</td><td>@auto.Miasto</td></tr>
+                                <tr><td class="text-muted">Kategoria</td><td>@auto.Kategoria</td></tr>
+                                <tr><td class="text-muted">Nr rej.</td><td><code>@auto.NrRejestracyjny</code></td></tr>
+                                <tr><td class="text-muted">Przebieg</td><td>@auto.Przebieg.ToString("N0") km</td></tr>
+                            </table>
+                        </div>
+                        <div class="card-footer d-flex justify-content-between align-items-center">
+                            <span class="badge bg-success fs-6">@auto.CenaDoba PLN / doba</span>
+                            <button class="btn btn-primary btn-sm"
+                                    @onclick="() => WybierzAuto(auto)">
+                                Zarezerwuj
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            }
+        </div>
+    }
+</div>
+
+@if (wybraneAuto != null)
+{
+    <div class="modal d-block" style="background:rgba(0,0,0,0.5)">
+        <div class="modal-dialog">
+            <div class="modal-content">
+                <div class="modal-header bg-dark text-white">
+                    <h5 class="modal-title">
+                        Rezerwacja: @wybraneAuto.Marka @wybraneAuto.Model
+                    </h5>
+                    <button class="btn-close btn-close-white" @onclick="() => wybraneAuto = null"></button>
+                </div>
+                <div class="modal-body">
+                    @if (!Auth.IsLoggedIn)
+                    {
+                        <div class="alert alert-warning">
+                            Musisz być zalogowany aby złożyć rezerwację.
+                            <a href="/login" class="alert-link">Zaloguj się</a>
+                        </div>
+                    }
+                    else
+                    {
+                        <div class="mb-3">
+                            <label class="form-label">Data od</label>
+                            <input class="form-control" type="date"
+                                   @bind="rezerwacja.DataOd"
+                                   min="@DateTime.Today.ToString("yyyy-MM-dd")" />
+                        </div>
+                        <div class="mb-3">
+                            <label class="form-label">Data do</label>
+                            <input class="form-control" type="date"
+                                   @bind="rezerwacja.DataDo"
+                                   min="@DateTime.Today.AddDays(1).ToString("yyyy-MM-dd")" />
+                        </div>
+                        @if (rezerwacja.DataDo > rezerwacja.DataOd)
+                        {
+                            var dni = (rezerwacja.DataDo - rezerwacja.DataOd).Days;
+                            <div class="alert alert-info">
+                                <strong>@dni dni</strong> ×
+                                <strong>@wybraneAuto.CenaDoba PLN</strong> =
+                                <strong>@((dni * wybraneAuto.CenaDoba).ToString("F2")) PLN netto</strong>
+                                <br/><small class="text-muted">(@((dni * wybraneAuto.CenaDoba * 1.23m).ToString("F2")) PLN brutto z VAT 23%)</small>
+                            </div>
+                        }
+                        @if (!string.IsNullOrEmpty(komunikat))
+                        {
+                            <div class="alert @(bladRez ? "alert-danger" : "alert-success")">
+                                @komunikat
+                            </div>
+                        }
+                    }
+                </div>
+                <div class="modal-footer">
+                    <button class="btn btn-secondary" @onclick="() => wybraneAuto = null">Anuluj</button>
+                    @if (Auth.IsLoggedIn)
+                    {
+                        <button class="btn btn-primary" @onclick="ZlozRezerwacje"
+                                disabled="@(rezerwacja.DataDo <= rezerwacja.DataOd)">
+                            Potwierdź rezerwację
+                        </button>
+                    }
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private List<Auto>? auta;
+    private string filtrMiasto = string.Empty;
+    private Auto? wybraneAuto;
+    private RezerwacjaModel rezerwacja = new();
+    private string komunikat = string.Empty;
+    private bool bladRez = false;
+
+    private IEnumerable<Auto> AutaFiltrowane =>
+        string.IsNullOrEmpty(filtrMiasto)
+            ? auta!
+            : auta!.Where(a => a.Miasto.Contains(filtrMiasto, StringComparison.OrdinalIgnoreCase));
+
+    protected override async Task OnInitializedAsync()
+    {
+        auta = await Http.GetFromJsonAsync<List<Auto>>("api/Cars/available");
+    }
+
+    private void WybierzAuto(Auto auto)
+    {
+        if (!Auth.IsLoggedIn) { Nav.NavigateTo("/login"); return; }
+        wybraneAuto = auto;
+        rezerwacja = new RezerwacjaModel
+        {
+            IdKlienta   = Auth.CurrentUser!.IdUzytkownika,
+            IdSamochodu = auto.IdSamochodu,
+            DataOd      = DateTime.Today,
+            DataDo      = DateTime.Today.AddDays(1)
+        };
+        komunikat = string.Empty;
+        bladRez   = false;
+    }
+
+    private async Task ZlozRezerwacje()
+    {
+        var response = await Http.PostAsJsonAsync("api/Rentals/reserve", rezerwacja);
+        if (response.IsSuccessStatusCode)
+        {
+            bladRez   = false;
+            komunikat = "✓ Rezerwacja złożona pomyślnie! Możesz ją zobaczyć w 'Moje wypożyczenia'.";
+            await Task.Delay(2000);
+            wybraneAuto = null;
+            auta = await Http.GetFromJsonAsync<List<Auto>>("api/Cars/available");
+        }
+        else
+        {
+            bladRez   = true;
+            var err   = await response.Content.ReadAsStringAsync();
+            komunikat = "Błąd rezerwacji: " + err;
+        }
+    }
+
+    public class Auto
+    {
+        public int IdSamochodu { get; set; }
+        public string Marka { get; set; } = string.Empty;
+        public string Model { get; set; } = string.Empty;
+        public string? Silnik { get; set; }
+        public string? Sila { get; set; }
+        public string NrRejestracyjny { get; set; } = string.Empty;
+        public int Przebieg { get; set; }
+        public string Miasto { get; set; } = string.Empty;
+        public string Oddzial { get; set; } = string.Empty;
+        public string Kategoria { get; set; } = string.Empty;
+        public decimal CenaDoba { get; set; }
+    }
+
+    public class RezerwacjaModel
+    {
+        public int IdKlienta { get; set; }
+        public int IdSamochodu { get; set; }
+        public DateTime DataOd { get; set; }
+        public DateTime DataDo { get; set; }
+    }
+}

@@ -1,0 +1,86 @@
+@page "/login"
+@inject AuthService Auth
+@inject NavigationManager Nav
+
+<div class="d-flex justify-content-center align-items-center" style="min-height:80vh">
+    <div class="card shadow" style="width:420px">
+        <div class="card-header bg-dark text-white text-center py-3">
+            <h4 class="mb-0">Wypożyczalnia Aut</h4>
+            <small class="text-white-50">System zarządzania</small>
+        </div>
+        <div class="card-body p-4">
+            <div class="mb-3">
+                <label class="form-label">Login</label>
+                <input class="form-control" @bind="login"
+                       @onkeypress="OnKeyPress"
+                       placeholder="PESEL (pracownik) lub Email (klient)" />
+            </div>
+            <div class="mb-3">
+                <label class="form-label">Hasło</label>
+                <input class="form-control" type="password" @bind="password"
+                       @onkeypress="OnKeyPress"
+                       placeholder="Wpisz hasło..." />
+            </div>
+
+            @if (!string.IsNullOrEmpty(blad))
+            {
+                <div class="alert alert-danger py-2">@blad</div>
+            }
+
+            <button class="btn btn-primary w-100 mt-2"
+                    @onclick="Zaloguj"
+                    disabled="@ladowanie">
+                @if (ladowanie)
+                {
+                    <span class="spinner-border spinner-border-sm me-2"></span>
+                }
+                Zaloguj się
+            </button>
+
+            <hr class="mt-4"/>
+            <div class="text-muted small text-center">
+                <strong>Testowe konta:</strong><br/>
+                Agent: <code>95010112345</code> / <code>Michal2026!</code><br/>
+                Księgowy: <code>90030334567</code> / <code>Anna2026!</code><br/>
+                Klient: <code>jan.kowalski@gmail.com</code> / <code>Jan2026!</code>
+            </div>
+        </div>
+    </div>
+</div>
+
+@code {
+    private string login    = string.Empty;
+    private string password = string.Empty;
+    private string blad     = string.Empty;
+    private bool ladowanie  = false;
+
+    protected override void OnInitialized()
+    {
+        if (Auth.IsLoggedIn) Nav.NavigateTo("/");
+    }
+
+    private async Task OnKeyPress(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter") await Zaloguj();
+    }
+
+    private async Task Zaloguj()
+    {
+        if (string.IsNullOrWhiteSpace(login) || string.IsNullOrWhiteSpace(password))
+        {
+            blad = "Wpisz login i hasło.";
+            return;
+        }
+
+        ladowanie = true;
+        blad      = string.Empty;
+
+        var sukces = await Auth.Login(login, password);
+        ladowanie  = false;
+
+        if (sukces)
+            Nav.NavigateTo("/");
+        else
+            blad = "Nieprawidłowy login lub hasło.";
+    }
+}

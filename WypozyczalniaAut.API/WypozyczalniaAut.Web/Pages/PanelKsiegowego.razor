@@ -1,0 +1,196 @@
+@page "/panel-ksiegowego"
+@inject HttpClient Http
+@inject AuthService Auth
+
+<div class="container mt-4">
+    <h2>Panel księgowego</h2>
+    <p class="text-muted">Zalogowany jako: <strong>@Auth.CurrentUser?.Nazwa</strong></p>
+
+    <div class="card shadow-sm mb-4">
+        <div class="card-header bg-dark text-white">
+            <strong>Raport miesięczny</strong>
+        </div>
+        <div class="card-body">
+            <div class="row mb-3 align-items-end">
+    <div class="col-md-2">
+        <label class="form-label">Rok</label>
+        <input class="form-control" type="number" 
+               @bind="rok" @bind:event="oninput"
+               min="2020" max="2099"/>
+    </div>
+    <div class="col-md-2">
+        <label class="form-label">Miesiąc</label>
+        <select class="form-select" 
+                value="@miesiac"
+                @onchange="e => miesiac = int.Parse(e.Value!.ToString()!)">
+            <option value="1">Styczeń</option>
+            <option value="2">Luty</option>
+            <option value="3">Marzec</option>
+            <option value="4">Kwiecień</option>
+            <option value="5">Maj</option>
+            <option value="6">Czerwiec</option>
+            <option value="7">Lipiec</option>
+            <option value="8">Sierpień</option>
+            <option value="9">Wrzesień</option>
+            <option value="10">Październik</option>
+            <option value="11">Listopad</option>
+            <option value="12">Grudzień</option>
+        </select>
+    </div>
+    <div class="col-md-2">
+        <button class="btn btn-primary w-100" @onclick="PobierzRaport">
+            Generuj
+        </button>
+    </div>
+</div>
+
+            @if (ladowanie)
+            {
+                <div class="d-flex justify-content-center py-4">
+                    <div class="spinner-border text-primary" role="status"></div>
+                </div>
+            }
+
+            @if (raport != null)
+            {
+                <div class="row mb-4">
+                    <div class="col-md-4">
+                        <div class="card text-center border-primary">
+                            <div class="card-body">
+                                <h6 class="text-muted">Liczba wypożyczeń</h6>
+                                <h2 class="text-primary">@raport.Podsumowanie.LiczbaWypozyczen</h2>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="card text-center border-success">
+                            <div class="card-body">
+                                <h6 class="text-muted">Przychód netto</h6>
+                                <h2 class="text-success">@raport.Podsumowanie.PrzychdoNetto.ToString("F2") PLN</h2>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="col-md-4">
+                        <div class="card text-center border-success">
+                            <div class="card-body">
+                                <h6 class="text-muted">Przychód brutto</h6>
+                                <h2 class="text-success">@raport.Podsumowanie.PrzychdoBrutto.ToString("F2") PLN</h2>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                @if (raport.NiezaplaconeFaktury.Any())
+                {
+                    <h5 class="mb-3">
+                        Niezapłacone faktury
+                        <span class="badge bg-danger ms-2">@raport.NiezaplaconeFaktury.Count</span>
+                    </h5>
+                    <div class="table-responsive">
+                        <table class="table table-hover align-middle">
+                            <thead class="table-dark">
+                                <tr>
+                                    <th>#</th>
+                                    <th>Klient</th>
+                                    <th>Email</th>
+                                    <th>Kwota brutto</th>
+                                    <th>Status</th>
+                                    <th>Data wystawienia</th>
+                                    <th>Akcja</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                @foreach (var f in raport.NiezaplaconeFaktury)
+                                {
+                                    <tr>
+                                        <td><strong>#@f.IdFaktury</strong></td>
+                                        <td>@f.Klient</td>
+                                        <td><small>@f.Email</small></td>
+                                        <td><strong>@f.KwotaBrutto.ToString("F2") PLN</strong></td>
+                                        <td>
+                                            <span class="badge @(f.StatusPlatnosci == "Zalegla" ? "bg-danger" : "bg-warning text-dark")">
+                                                @f.StatusPlatnosci
+                                            </span>
+                                        </td>
+                                        <td>@f.DataWystawienia.ToString("dd.MM.yyyy")</td>
+                                        <td>
+                                            <button class="btn btn-sm btn-success"
+                                                    @onclick="() => OznaczJakoOplacona(f.IdFaktury)">
+                                                ✓ Opłacona
+                                            </button>
+                                        </td>
+                                    </tr>
+                                }
+                            </tbody>
+                            <tfoot class="table-light">
+                                <tr>
+                                    <td colspan="3"><strong>Łącznie do odzyskania:</strong></td>
+                                    <td colspan="4">
+                                        <strong class="text-danger">
+                                            @raport.NiezaplaconeFaktury.Sum(f => f.KwotaBrutto).ToString("F2") PLN
+                                        </strong>
+                                    </td>
+                                </tr>
+                            </tfoot>
+                        </table>
+                    </div>
+                }
+                else
+                {
+                    <div class="alert alert-success">
+                        ✓ Brak niezapłaconych faktur w tym okresie.
+                    </div>
+                }
+            }
+        </div>
+    </div>
+</div>
+
+@code {
+    private int rok     = DateTime.Now.Year;
+    private int miesiac = DateTime.Now.Month;
+    private bool ladowanie = false;
+    private RaportModel? raport;
+
+    protected override async Task OnInitializedAsync()
+    {
+        await PobierzRaport();
+    }
+
+    private async Task PobierzRaport()
+    {
+        ladowanie = true;
+        raport = await Http.GetFromJsonAsync<RaportModel>(
+            $"api/Reports/monthly?year={rok}&month={miesiac}");
+        ladowanie = false;
+    }
+
+    private async Task OznaczJakoOplacona(int idFaktury)
+    {
+        var r = await Http.PutAsync($"api/Reports/invoices/{idFaktury}/paid", null);
+        if (r.IsSuccessStatusCode) await PobierzRaport();
+    }
+
+    public class PodsumowanieModel
+    {
+        public int LiczbaWypozyczen { get; set; }
+        public decimal PrzychdoNetto   { get; set; }
+        public decimal PrzychdoBrutto  { get; set; }
+    }
+
+    public class FakturaModel
+    {
+        public int IdFaktury { get; set; }
+        public string Klient { get; set; } = string.Empty;
+        public string Email  { get; set; } = string.Empty;
+        public decimal KwotaBrutto { get; set; }
+        public string StatusPlatnosci { get; set; } = string.Empty;
+        public DateTime DataWystawienia { get; set; }
+    }
+
+    public class RaportModel
+    {
+        public PodsumowanieModel Podsumowanie { get; set; } = new();
+        public List<FakturaModel> NiezaplaconeFaktury { get; set; } = new();
+    }
+}

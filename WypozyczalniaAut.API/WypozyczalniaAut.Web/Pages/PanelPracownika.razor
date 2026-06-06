@@ -1,0 +1,253 @@
+@page "/panel-pracownika"
+@inject HttpClient Http
+@inject AuthService Auth
+
+<div class="container mt-4">
+    <h2>Panel pracownika</h2>
+    <p class="text-muted">Zalogowany jako: <strong>@Auth.CurrentUser?.Nazwa</strong></p>
+
+    <ul class="nav nav-tabs mb-4">
+        <li class="nav-item">
+            <button class="nav-link @(zakladka == "wydanie" ? "active" : "")"
+                    @onclick="ZmienNaWydanie">
+                Do wydania
+            </button>
+        </li>
+        <li class="nav-item">
+            <button class="nav-link @(zakladka == "zwrot" ? "active" : "")"
+                    @onclick="ZmienNaZwrot">
+                Do zwrotu
+            </button>
+        </li>
+    </ul>
+
+    @if (zakladka == "wydanie")
+    {
+        <h5>Rezerwacje oczekujące na wydanie pojazdu</h5>
+        @if (ladowanieRez)
+        {
+            <div class="spinner-border text-primary"></div>
+        }
+        else if (rezerwacje == null || !rezerwacje.Any())
+        {
+            <div class="alert alert-info">Brak rezerwacji oczekujących na wydanie.</div>
+        }
+        else
+        {
+            <div class="table-responsive">
+                <table class="table table-hover align-middle">
+                    <thead class="table-dark">
+                        <tr>
+                            <th>#</th>
+                            <th>Klient</th>
+                            <th>Samochód</th>
+                            <th>Planowany zwrot</th>
+                            <th>Akcja</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var r in rezerwacje)
+                        {
+                            <tr>
+                                <td><strong>#@r.IdWypozyczenia</strong></td>
+                                <td>@r.Klient</td>
+                                <td>@r.Pojazd<br/><small class="text-muted">@r.NrRejestracyjny</small></td>
+                                <td>@r.DataZwrotuPlanowana.ToString("dd.MM.yyyy")</td>
+                                <td>
+                                    @if (potwierdzWydanie == r.IdWypozyczenia)
+                                    {
+                                        <div class="d-flex gap-2">
+                                            <button class="btn btn-sm btn-success"
+                                                    @onclick="() => WydajPojazd(r.IdWypozyczenia)">
+                                                ✓ Potwierdź wydanie
+                                            </button>
+                                            <button class="btn btn-sm btn-secondary"
+                                                    @onclick="() => potwierdzWydanie = 0">
+                                                Anuluj
+                                            </button>
+                                        </div>
+                                    }
+                                    else
+                                    {
+                                        <button class="btn btn-sm btn-primary"
+                                                @onclick="() => potwierdzWydanie = r.IdWypozyczenia">
+                                            Wydaj pojazd klientowi
+                                        </button>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+        @if (!string.IsNullOrEmpty(msgWydanie))
+        {
+            <div class="alert @(bladWydanie ? "alert-danger" : "alert-success") mt-3">
+                @msgWydanie
+            </div>
+        }
+    }
+
+    @if (zakladka == "zwrot")
+    {
+        <h5>Aktywne wypożyczenia — przyjmij zwrot</h5>
+        @if (ladowanieAkt)
+        {
+            <div class="spinner-border text-primary"></div>
+        }
+        else if (aktywne == null || !aktywne.Any())
+        {
+            <div class="alert alert-info">Brak aktywnych wypożyczeń.</div>
+        }
+        else
+        {
+            <div class="table-responsive">
+                <table class="table table-hover align-middle">
+                    <thead class="table-dark">
+                        <tr>
+                            <th>#</th>
+                            <th>Klient</th>
+                            <th>Samochód</th>
+                            <th>Data wydania</th>
+                            <th>Planowany zwrot</th>
+                            <th>Przebieg końcowy</th>
+                            <th>Akcja</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        @foreach (var a in aktywne)
+                        {
+                            <tr>
+                                <td><strong>#@a.IdWypozyczenia</strong></td>
+                                <td>@a.Klient</td>
+                                <td>@a.Pojazd<br/><small class="text-muted">@a.NrRejestracyjny</small></td>
+                                <td>@a.DataWypozyczenia?.ToString("dd.MM.yyyy HH:mm")</td>
+                                <td>@a.DataZwrotuPlanowana.ToString("dd.MM.yyyy")</td>
+                                <td style="width:150px">
+                                    <input class="form-control form-control-sm" type="number"
+                                           placeholder="km"
+                                           @bind="przebiegi[a.IdWypozyczenia]" />
+                                </td>
+                                <td>
+                                    @if (potwierdzZwrot == a.IdWypozyczenia)
+                                    {
+                                        <div class="d-flex gap-2">
+                                            <button class="btn btn-sm btn-warning"
+                                                    @onclick="() => ZwrocPojazd(a.IdWypozyczenia)">
+                                                ✓ Potwierdź zwrot
+                                            </button>
+                                            <button class="btn btn-sm btn-secondary"
+                                                    @onclick="() => potwierdzZwrot = 0">
+                                                Anuluj
+                                            </button>
+                                        </div>
+                                    }
+                                    else
+                                    {
+                                        <button class="btn btn-sm btn-outline-warning"
+                                                @onclick="() => potwierdzZwrot = a.IdWypozyczenia"
+                                                disabled="@(przebiegi.GetValueOrDefault(a.IdWypozyczenia) <= 0)">
+                                            Przyjmij zwrot
+                                        </button>
+                                    }
+                                </td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+            </div>
+        }
+        @if (!string.IsNullOrEmpty(msgZwrot))
+        {
+            <div class="alert @(bladZwrot ? "alert-danger" : "alert-success") mt-3">
+                @msgZwrot
+            </div>
+        }
+    }
+</div>
+
+@code {
+    private string zakladka    = "wydanie";
+    private bool ladowanieRez  = false;
+    private bool ladowanieAkt  = false;
+    private int potwierdzWydanie = 0;
+    private int potwierdzZwrot   = 0;
+    private string msgWydanie  = string.Empty;
+    private string msgZwrot    = string.Empty;
+    private bool bladWydanie   = false;
+    private bool bladZwrot     = false;
+    private List<WypozyczeniePracownik>? rezerwacje;
+    private List<WypozyczeniePracownik>? aktywne;
+    private Dictionary<int, int> przebiegi = new();
+
+    protected override async Task OnInitializedAsync()
+    {
+        await PobierzRezerwacje();
+    }
+
+    private async Task ZmienNaWydanie()
+    {
+        zakladka = "wydanie";
+        await PobierzRezerwacje();
+    }
+
+    private async Task ZmienNaZwrot()
+    {
+        zakladka = "zwrot";
+        await PobierzAktywne();
+    }
+
+    private async Task PobierzRezerwacje()
+    {
+        ladowanieRez = true;
+        rezerwacje = await Http.GetFromJsonAsync<List<WypozyczeniePracownik>>("api/Rentals/pending");
+        ladowanieRez = false;
+    }
+
+    private async Task PobierzAktywne()
+    {
+        ladowanieAkt = true;
+        aktywne = await Http.GetFromJsonAsync<List<WypozyczeniePracownik>>("api/Rentals/active");
+        if (aktywne != null)
+            foreach (var a in aktywne)
+                przebiegi[a.IdWypozyczenia] = 0;
+        ladowanieAkt = false;
+    }
+
+    private async Task WydajPojazd(int id)
+    {
+        var r = await Http.PostAsJsonAsync($"api/Rentals/{id}/issue",
+            new { IdPracownika = Auth.CurrentUser!.IdUzytkownika });
+        bladWydanie = !r.IsSuccessStatusCode;
+        msgWydanie  = r.IsSuccessStatusCode
+            ? $"✓ Pojazd z rezerwacji #{id} wydany klientowi."
+            : "Błąd: " + await r.Content.ReadAsStringAsync();
+        potwierdzWydanie = 0;
+        if (r.IsSuccessStatusCode) await PobierzRezerwacje();
+    }
+
+    private async Task ZwrocPojazd(int id)
+    {
+        var przebieg = przebiegi.GetValueOrDefault(id);
+        if (przebieg <= 0) { bladZwrot = true; msgZwrot = "Podaj przebieg końcowy pojazdu."; return; }
+        var r = await Http.PostAsJsonAsync($"api/Rentals/{id}/return",
+            new { IdPracownika = Auth.CurrentUser!.IdUzytkownika, PrzebiegKonc = przebieg });
+        bladZwrot = !r.IsSuccessStatusCode;
+        msgZwrot  = r.IsSuccessStatusCode
+            ? $"✓ Zwrot #{id} przyjęty. Faktura wystawiona automatycznie."
+            : "Błąd: " + await r.Content.ReadAsStringAsync();
+        potwierdzZwrot = 0;
+        if (r.IsSuccessStatusCode) await PobierzAktywne();
+    }
+
+    public class WypozyczeniePracownik
+    {
+        public int IdWypozyczenia { get; set; }
+        public string Klient { get; set; } = string.Empty;
+        public string Pojazd { get; set; } = string.Empty;
+        public string NrRejestracyjny { get; set; } = string.Empty;
+        public DateTime? DataWypozyczenia { get; set; }
+        public DateTime DataZwrotuPlanowana { get; set; }
+    }
+}
