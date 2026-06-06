@@ -227,14 +227,18 @@ namespace WypozyczalniaAut.API.Controllers
             }
 
             var sql = @"UPDATE wypozyczalnia_owner.Wypozyczenia 
-                SET Status = 'Anulowane'
-                WHERE ID_Wypozyczenia = :id";
+            SET Status = 'Anulowane'
+            WHERE ID_Wypozyczenia = :id";
 
             using var cmd = new OracleCommand(sql, _db);
             cmd.Parameters.Add("id", id);
             await cmd.ExecuteNonQueryAsync();
-            await _db.CloseAsync();
 
+            // COMMIT - Oracle nie ma autocommit
+            var commitCmd = new OracleCommand("COMMIT", _db);
+            await commitCmd.ExecuteNonQueryAsync();
+
+            await _db.CloseAsync();
             return Ok(new { Message = "Rezerwacja anulowana." });
         }
 

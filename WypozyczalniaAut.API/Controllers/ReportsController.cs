@@ -94,10 +94,11 @@ namespace WypozyczalniaAut.API.Controllers
                         SET Status_Platnosci = 'Oplacona'
                         WHERE ID_Faktury = :id";
 
-            using var cmd = new OracleCommand(sql, _db);
-            cmd.Parameters.Add("id", id);
-
             var rows = await cmd.ExecuteNonQueryAsync();
+
+            var commitCmd = new OracleCommand("COMMIT", _db);
+            await commitCmd.ExecuteNonQueryAsync();
+
             await _db.CloseAsync();
 
             if (rows == 0)
