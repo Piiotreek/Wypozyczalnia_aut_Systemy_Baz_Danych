@@ -1,0 +1,278 @@
+-- Generator danych testowych
+-- Dodaj 10 klientów
+BEGIN
+  FOR i IN 4..13 LOOP
+    INSERT INTO Klienci(Imie, Nazwisko, PESEL, Email, Telefon, PasswordHash)
+    VALUES(
+      'Klient' || i,
+      'Testowy' || i,
+      LPAD(i, 11, '0'),
+      'klient' || i || '@test.pl',
+      '50000' || LPAD(i, 5, '0'),
+      '$2a$11$dummyhashfortestingpurposesonly' || i
+    );
+  END LOOP;
+  COMMIT;
+END;
+/
+
+-- Dodaj 10 samochodów
+BEGIN
+  FOR i IN 1..10 LOOP
+    INSERT INTO Samochody(ID_Modelu, ID_Statusu, ID_Oddzialu, 
+                          Nr_Rejestracyjny, VIN, Przebieg)
+    VALUES(
+      MOD(i-1, 4) + 1,
+      1,
+      MOD(i-1, 3) + 1,
+      'TS' || LPAD(i, 5, '0'),
+      'VIN' || LPAD(i*7, 14, '0'),
+      i * 10000
+    );
+  END LOOP;
+  COMMIT;
+END;
+////////////////
+-- 500 zakończonych wypożyczeń z ostatnich 2 lat
+BEGIN
+  FOR i IN 1..500 LOOP
+    DECLARE
+      v_id_wyp     NUMBER;
+      v_id_klienta NUMBER;
+      v_id_sam     NUMBER;
+      v_data_od    TIMESTAMP;
+      v_data_do    DATE;
+      v_data_zwrot TIMESTAMP;
+      v_dni        NUMBER;
+      v_koszt      NUMBER;
+      v_cena       NUMBER;
+      v_id_kat     NUMBER;
+    BEGIN
+      -- Losowy klient (1-13)
+      v_id_klienta := MOD(i, 13) + 1;
+      -- Losowy samochód (1-14)
+      v_id_sam := MOD(i, 14) + 1;
+      -- Losowa data rozpoczęcia w ciągu ostatnich 2 lat
+      v_data_od := SYSTIMESTAMP - (MOD(i * 7, 730) + 1);
+      -- Losowa liczba dni (1-14)
+      v_dni := MOD(i, 14) + 1;
+      v_data_do := CAST(v_data_od AS DATE) + v_dni;
+      v_data_zwrot := v_data_od + v_dni;
+
+      -- Wstaw wypożyczenie
+      INSERT INTO Wypozyczenia(
+        ID_Klienta, ID_Samochodu,
+        Data_Wypozyczenia, Data_Zwrotu_Planowana,
+        Data_Zwrotu_Rzeczywista,
+        ID_Pracownika_Wydajacego, ID_Pracownika_Odbierajacego,
+        Status
+      ) VALUES (
+        v_id_klienta, v_id_sam,
+        v_data_od, v_data_do,
+        v_data_zwrot,
+        MOD(i, 3) + 1, MOD(i, 3) + 1,
+        'Zakonczone'
+      ) RETURNING ID_Wypozyczenia INTO v_id_wyp;
+
+      -- Pobierz cenę dla kategorii samochodu
+      SELECT c.Cena_Doba INTO v_cena
+      FROM Cenniki c
+      JOIN Modele_Konfiguracje m ON c.ID_Kategorii = m.ID_Kategorii
+      JOIN Samochody s ON m.ID_Modelu = s.ID_Modelu
+      WHERE s.ID_Samochodu = v_id_sam
+        AND (c.Obowiazuje_Do IS NULL OR c.Obowiazuje_Do >= SYSDATE)
+        AND ROWNUM = 1;
+
+      v_koszt := v_dni * v_cena;
+
+      -- Wstaw fakturę
+      INSERT INTO Faktury(
+        ID_Wypozyczenia, Data_Wystawienia,
+        Kwota_Netto, Kwota_Brutto, Status_Platnosci
+      ) VALUES (
+        v_id_wyp, CAST(v_data_zwrot AS DATE),
+        v_koszt, ROUND(v_koszt * 1.23, 2),
+        CASE WHEN MOD(i, 10) = 0 THEN 'Zalegla'
+             WHEN MOD(i, 5)  = 0 THEN 'Oczekuje'
+             ELSE 'Oplacona' END
+      );
+
+      -- Zmień status samochodu (trigger zapisze log)
+      UPDATE Samochody SET ID_Statusu = 2
+      WHERE ID_Samochodu = v_id_sam;
+
+      UPDATE Samochody SET ID_Statusu = 1
+      WHERE ID_Samochodu = v_id_sam;
+
+    EXCEPTION
+      WHEN OTHERS THEN NULL; -- pomiń błędy pojedynczych rekordów
+    END;
+  END LOOP;
+  COMMIT;
+END;
+/
+/////////////////////////////////
+-- Tabela archiwalna dla starych wypożyczeń
+CREATE TABLE Wypozyczenia_Archiwum AS 
+SELECT * FROM Wypozyczenia WHERE 1=0;
+
+-- Dodaj kolumnę z datą archiwizacji
+ALTER TABLE Wypozyczenia_Archiwum 
+ADD Data_Archiwizacji TIMESTAMP DEFAULT SYSTIMESTAMP;
+
+-- Indeks na tabeli archiwalnej
+CREATE INDEX idx_arch_data 
+ON Wypozyczenia_Archiwum(Data_Zwrotu_Rzeczywista);
+
+CREATE INDEX idx_arch_klient
+ON Wypozyczenia_Archiwum(ID_Klienta);
+//////////////////////////////////
+CREATE OR REPLACE PROCEDURE ArchiwizujWypozyczenia(
+  p_miesiac_wstecz IN NUMBER DEFAULT 12
+) AS
+  v_liczba_przeniesonych NUMBER := 0;
+  v_data_graniczna       DATE;
+BEGIN
+  v_data_graniczna := ADD_MONTHS(SYSDATE, -p_miesiac_wstecz);
+
+  -- Krok 1: Przenieś wypożyczenia do archiwum
+  INSERT INTO Wypozyczenia_Archiwum
+  SELECT w.*, SYSTIMESTAMP
+  FROM Wypozyczenia w
+  WHERE w.Status = 'Zakonczone'
+    AND CAST(w.Data_Zwrotu_Rzeczywista AS DATE) < v_data_graniczna;
+
+  v_liczba_przeniesonych := SQL%ROWCOUNT;
+
+  -- Krok 2: Usuń najpierw faktury powiązane z archiwizowanymi wypożyczeniami
+  DELETE FROM Faktury
+  WHERE ID_Wypozyczenia IN (
+    SELECT ID_Wypozyczenia FROM Wypozyczenia
+    WHERE Status = 'Zakonczone'
+      AND CAST(Data_Zwrotu_Rzeczywista AS DATE) < v_data_graniczna
+  );
+
+  -- Krok 3: Teraz usuń wypożyczenia z tabeli głównej
+  DELETE FROM Wypozyczenia
+  WHERE Status = 'Zakonczone'
+    AND CAST(Data_Zwrotu_Rzeczywista AS DATE) < v_data_graniczna;
+
+  COMMIT;
+
+  DBMS_OUTPUT.PUT_LINE('Zarchiwizowano: ' || v_liczba_przeniesonych || ' wypożyczeń');
+  DBMS_OUTPUT.PUT_LINE('Data graniczna: ' || TO_CHAR(v_data_graniczna, 'DD-MM-YYYY'));
+
+EXCEPTION
+  WHEN OTHERS THEN
+    ROLLBACK;
+    RAISE;
+END;
+/
+/////////TESTOWANIE//////////
+EXEC ArchiwizujWypozyczenia(6);
+SELECT COUNT(*) AS "W archiwum" FROM Wypozyczenia_Archiwum;
+SELECT COUNT(*) AS "W tabeli głównej" FROM Wypozyczenia;
+/////////////////////indexy////////////
+CREATE BITMAP INDEX idx_faktury_status_platnosci
+ON Faktury(Status_Platnosci);
+
+CREATE INDEX idx_wyp_rok
+ON Wypozyczenia(EXTRACT(YEAR FROM CAST(Data_Zwrotu_Rzeczywista AS DATE)));
+
+
+CREATE INDEX idx_wyp_status_klient
+ON Wypozyczenia(Status, ID_Klienta);
+
+////////////////////
+/////////////DODANO DUZO REKORDÓW////////////////
+BEGIN
+  FOR i IN 1..1500 LOOP
+    DECLARE
+      v_id_wyp     NUMBER;
+      v_id_klienta NUMBER;
+      v_id_sam     NUMBER;
+      v_data_od    TIMESTAMP;
+      v_data_do    DATE;
+      v_data_zwrot TIMESTAMP;
+      v_dni        NUMBER;
+      v_koszt      NUMBER;
+      v_cena       NUMBER;
+    BEGIN
+      v_id_klienta := MOD(i, 13) + 1;
+      v_id_sam     := MOD(i, 14) + 1;
+      v_data_od    := SYSTIMESTAMP - (MOD(i * 3, 700) + 1);
+      v_dni        := MOD(i, 14) + 1;
+      v_data_do    := CAST(v_data_od AS DATE) + v_dni;
+      v_data_zwrot := v_data_od + v_dni;
+
+      INSERT INTO Wypozyczenia(
+        ID_Klienta, ID_Samochodu,
+        Data_Wypozyczenia, Data_Zwrotu_Planowana,
+        Data_Zwrotu_Rzeczywista,
+        ID_Pracownika_Wydajacego, ID_Pracownika_Odbierajacego,
+        Status
+      ) VALUES (
+        v_id_klienta, v_id_sam,
+        v_data_od, v_data_do,
+        v_data_zwrot,
+        MOD(i, 3) + 1, MOD(i, 3) + 1,
+        'Zakonczone'
+      ) RETURNING ID_Wypozyczenia INTO v_id_wyp;
+
+      SELECT c.Cena_Doba INTO v_cena
+      FROM Cenniki c
+      JOIN Modele_Konfiguracje m ON c.ID_Kategorii = m.ID_Kategorii
+      JOIN Samochody s ON m.ID_Modelu = s.ID_Modelu
+      WHERE s.ID_Samochodu = v_id_sam
+        AND (c.Obowiazuje_Do IS NULL OR c.Obowiazuje_Do >= SYSDATE)
+        AND ROWNUM = 1;
+
+      v_koszt := v_dni * v_cena;
+
+      INSERT INTO Faktury(
+        ID_Wypozyczenia, Data_Wystawienia,
+        Kwota_Netto, Kwota_Brutto, Status_Platnosci
+      ) VALUES (
+        v_id_wyp, CAST(v_data_zwrot AS DATE),
+        v_koszt, ROUND(v_koszt * 1.23, 2),
+        CASE WHEN MOD(i, 10) = 0 THEN 'Zalegla'
+             WHEN MOD(i, 5)  = 0 THEN 'Oczekuje'
+             ELSE 'Oplacona' END
+      );
+
+      UPDATE Samochody SET ID_Statusu = 2 WHERE ID_Samochodu = v_id_sam;
+      UPDATE Samochody SET ID_Statusu = 1 WHERE ID_Samochodu = v_id_sam;
+
+    EXCEPTION
+      WHEN OTHERS THEN NULL;
+    END;
+  END LOOP;
+  COMMIT;
+END;
+//////////////////////
+Usunieto dwie procedury 
+///////////
+DROP PROCEDURE RezerwujPojazd;
+DROP PROCEDURE GenerujRaportMiesięczny;
+///////////
+///////////ODSWIEZANIE WIDOKU/////////
+CREATE OR REPLACE VIEW v_historia_wynajmow AS
+SELECT
+  w.ID_Wypozyczenia,
+  k.Imie || ' ' || k.Nazwisko AS Klient,
+  k.Email,
+  m.Marka || ' ' || m.Model AS Pojazd,
+  s.Nr_Rejestracyjny,
+  w.Data_Wypozyczenia,
+  w.Data_Zwrotu_Planowana,
+  w.Data_Zwrotu_Rzeczywista,
+  w.Status,
+  f.Kwota_Netto,
+  f.Kwota_Brutto,
+  f.Status_Platnosci
+FROM Wypozyczenia w
+JOIN Klienci k ON w.ID_Klienta = k.ID_Klienta
+JOIN Samochody s ON w.ID_Samochodu = s.ID_Samochodu
+JOIN Modele_Konfiguracje m ON s.ID_Modelu = m.ID_Modelu
+LEFT JOIN Faktury f ON w.ID_Wypozyczenia = f.ID_Wypozyczenia;
+/
