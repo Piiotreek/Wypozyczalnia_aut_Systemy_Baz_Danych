@@ -940,3 +940,13 @@ UPDATE Pracownicy SET Email = 'piotr.poletylo@wypozyczalnia.pl' WHERE ID_Pracown
 UPDATE Pracownicy SET Email = 'anna.kowalska@wypozyczalnia.pl' WHERE ID_Pracownika = 3;
 COMMIT;
 
+
+///////////dodatkowe granty///////
+-- db_datawriter - brakujące tabele
+GRANT INSERT, UPDATE, DELETE ON Wypozyczenia_Archiwum TO db_datawriter;
+GRANT INSERT, UPDATE, DELETE ON Historia_Logi_Pojazdu TO db_datawriter;
+
+-- db_procexecutor - procedura archiwizacji
+GRANT EXECUTE ON ArchiwizujWypozyczenia TO db_procexecutor;
+
+
