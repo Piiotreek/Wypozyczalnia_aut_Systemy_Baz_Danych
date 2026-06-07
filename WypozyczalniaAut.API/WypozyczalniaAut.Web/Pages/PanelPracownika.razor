@@ -124,10 +124,23 @@
                                 <td>@a.Pojazd<br/><small class="text-muted">@a.NrRejestracyjny</small></td>
                                 <td>@a.DataWypozyczenia?.ToString("dd.MM.yyyy HH:mm")</td>
                                 <td>@a.DataZwrotuPlanowana.ToString("dd.MM.yyyy")</td>
-                                <td style="width:150px">
-                                    <input class="form-control form-control-sm" type="number"
-                                           placeholder="km"
-                                           @bind="przebiegi[a.IdWypozyczenia]" />
+                              <td style="width:200px">
+                                    <small class="text-muted d-block mb-1">
+                                        Przebieg przy wydaniu: <strong>@a.PrzebiegAktualny.ToString("N0") km</strong>
+                                    </small>
+                                    <div class="input-group input-group-sm">
+                                        <input class="form-control" type="number"
+                                               placeholder="Nowy odczyt km"
+                                               min="@a.PrzebiegAktualny"
+                                               @bind="przebiegi[a.IdWypozyczenia]" />
+                                        <span class="input-group-text">km</span>
+                                    </div>
+                                    @if (przebiegi.GetValueOrDefault(a.IdWypozyczenia) > a.PrzebiegAktualny)
+                                    {
+                                        <small class="text-success">
+                                            +@((przebiegi[a.IdWypozyczenia] - a.PrzebiegAktualny).ToString("N0")) km przejechanych
+                                        </small>
+                                    }
                                 </td>
                                 <td>
                                     @if (potwierdzZwrot == a.IdWypozyczenia)
@@ -249,5 +262,7 @@
         public string NrRejestracyjny { get; set; } = string.Empty;
         public DateTime? DataWypozyczenia { get; set; }
         public DateTime DataZwrotuPlanowana { get; set; }
+        public int PrzebiegAktualny { get; set; }
+
     }
 }

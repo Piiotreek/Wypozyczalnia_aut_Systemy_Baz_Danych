@@ -12,7 +12,7 @@ namespace WypozyczalniaAut.API.Models
 		public decimal? KwotaNetto { get; set; }
 		public decimal? KwotaBrutto { get; set; }
 		public string? StatusPlatnosci { get; set; }
-	}
+    }
 
 	public class RezerwacjaDto
 	{

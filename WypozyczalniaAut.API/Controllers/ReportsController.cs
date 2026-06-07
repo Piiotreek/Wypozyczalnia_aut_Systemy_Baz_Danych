@@ -84,19 +84,21 @@ namespace WypozyczalniaAut.API.Controllers
 
             await _db.CloseAsync();
             return Ok(new { Podsumowanie = summary, NiezaplaconeFaktury = niezaplacone });
-        }
+             }
 
         [HttpPut("invoices/{id}/paid")]
         public async Task<IActionResult> MarkAsPaid(int id)
         {
             await _db.OpenAsync();
             var sql = @"UPDATE wypozyczalnia_owner.Faktury 
-                        SET Status_Platnosci = 'Oplacona'
-                        WHERE ID_Faktury = :id";
+                SET Status_Platnosci = 'Oplacona'
+                WHERE ID_Faktury = :id";
 
+            using var cmd = new OracleCommand(sql, _db);
+            cmd.Parameters.Add("id", id);
             var rows = await cmd.ExecuteNonQueryAsync();
 
-            var commitCmd = new OracleCommand("COMMIT", _db);
+            using var commitCmd = new OracleCommand("COMMIT", _db);
             await commitCmd.ExecuteNonQueryAsync();
 
             await _db.CloseAsync();
@@ -105,6 +107,45 @@ namespace WypozyczalniaAut.API.Controllers
                 return NotFound(new { Message = "Faktura nie istnieje." });
 
             return Ok(new { Message = "Faktura oznaczona jako opłacona." });
+        }
+        [HttpGet("active")]
+        public async Task<IActionResult> GetActive()
+        {
+            await _db.OpenAsync();
+            var sql = @"SELECT w.ID_Wypozyczenia,
+                       k.Imie || ' ' || k.Nazwisko AS Klient,
+                       m.Marka || ' ' || m.Model AS Pojazd,
+                       s.Nr_Rejestracyjny,
+                       w.Data_Wypozyczenia,
+                       w.Data_Zwrotu_Planowana,
+                       s.Przebieg AS PrzebiegAktualy
+                FROM wypozyczalnia_owner.Wypozyczenia w
+                JOIN wypozyczalnia_owner.Klienci k ON w.ID_Klienta = k.ID_Klienta
+                JOIN wypozyczalnia_owner.Samochody s ON w.ID_Samochodu = s.ID_Samochodu
+                JOIN wypozyczalnia_owner.Modele_Konfiguracje m ON s.ID_Modelu = m.ID_Modelu
+                WHERE w.Status = 'Aktywne'
+                ORDER BY w.Data_Zwrotu_Planowana";
+
+            using var cmd = new OracleCommand(sql, _db);
+            using var reader = await cmd.ExecuteReaderAsync();
+            var lista = new List<object>();
+
+            while (await reader.ReadAsync())
+            {
+                lista.Add(new
+                {
+                    IdWypozyczenia = reader.GetInt32(0),
+                    Klient = reader.GetString(1),
+                    Pojazd = reader.GetString(2),
+                    NrRejestracyjny = reader.GetString(3),
+                    DataWypozyczenia = reader.IsDBNull(4) ? (DateTime?)null : reader.GetDateTime(4),
+                    DataZwrotuPlanowana = reader.GetDateTime(5),
+                    PrzebiegAktualny = reader.GetInt32(6)
+                });
+            }
+
+            await _db.CloseAsync();
+            return Ok(lista);
         }
     }
 }
