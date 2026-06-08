@@ -1,0 +1,944 @@
+-- =====================================================
+-- 1. KONFIGURACJA UŻYTKOWNIKÓW I RÓL (jako ADMIN, np. SYSTEM)
+-- =====================================================
+
+-- Tworzenie właściciela schematu
+CREATE USER wypozyczalnia_owner IDENTIFIED BY OwnerSecure2026x
+  DEFAULT TABLESPACE USERS
+  TEMPORARY TABLESPACE TEMP
+  QUOTA UNLIMITED ON USERS;
+
+GRANT CONNECT, RESOURCE TO wypozyczalnia_owner;
+GRANT CREATE VIEW TO wypozyczalnia_owner;
+GRANT CREATE SEQUENCE TO wypozyczalnia_owner;
+GRANT CREATE TRIGGER TO wypozyczalnia_owner;
+GRANT CREATE PROCEDURE TO wypozyczalnia_owner;
+
+-- Role aplikacyjne
+CREATE ROLE db_datareader;
+CREATE ROLE db_datawriter;
+CREATE ROLE db_procexecutor;
+
+-- Administrator aplikacyjny
+CREATE USER admin_wypoz IDENTIFIED BY AdminSecure2026x;
+GRANT CONNECT, RESOURCE TO admin_wypoz;
+GRANT db_datareader, db_datawriter, db_procexecutor TO admin_wypoz;
+
+-- Backend .NET
+CREATE USER app_identity IDENTIFIED BY AppBackend2026x;
+GRANT CREATE SESSION TO app_identity;
+GRANT db_datareader, db_datawriter, db_procexecutor TO app_identity;
+
+-- Deweloperzy
+CREATE USER dev_michal IDENTIFIED BY DevMichal2026x;
+GRANT CREATE SESSION TO dev_michal;
+GRANT db_datareader TO dev_michal;
+
+CREATE USER dev_piotr IDENTIFIED BY DevPiotr2026x;
+GRANT CREATE SESSION TO dev_piotr;
+GRANT db_datareader TO dev_piotr;
+
+SELECT username FROM dba_users WHERE username IN ('WYPOZYCZALNIA_OWNER', 'ADMIN_WYPOZ', 'APP_IDENTITY', 'DEV_MICHAL', 'DEV_PIOTR');
+
+-- Weryfikacja stanu kont (opcjonalnie)
+-- SELECT username, account_status FROM dba_users WHERE username IN ('WYPOZYCZALNIA_OWNER','ADMIN_WYPOZ','APP_IDENTITY','DEV_MICHAL','DEV_PIOTR');
+
+-- =====================================================
+-- 2. LOGOWANIE JAKO WYPOZYCZALNIA_OWNER I TWORZENIE SCHEMATU
+-- =====================================================
+-- (W rzeczywistym skrypcie należy się przełączyć na tego użytkownika)
+
+-- Tabele słownikowe (bez zależności)
+CREATE TABLE Dict_Kategorie (
+  ID_Kategorii  NUMBER PRIMARY KEY,
+  Nazwa_Kategorii VARCHAR2(30) NOT NULL
+);
+
+CREATE TABLE Dict_Statusy_Pojazdu (
+  ID_Statusu    NUMBER PRIMARY KEY,
+  Nazwa_Statusu VARCHAR2(30) NOT NULL
+);
+
+-- Tabele główne
+CREATE TABLE Oddzialy (
+  ID_Oddzialu  NUMBER PRIMARY KEY,
+  Nazwa        VARCHAR2(100) NOT NULL,
+  Miasto       VARCHAR2(50)  NOT NULL,
+  Adres        VARCHAR2(100) NOT NULL
+);
+
+CREATE TABLE Modele_Konfiguracje (
+  ID_Modelu    NUMBER PRIMARY KEY,
+  ID_Kategorii NUMBER NOT NULL,
+  Marka        VARCHAR2(50) NOT NULL,
+  Model        VARCHAR2(50) NOT NULL,
+  Silnik       VARCHAR2(50),
+  Sila         VARCHAR2(20),
+  CONSTRAINT fk_model_kategoria 
+    FOREIGN KEY (ID_Kategorii) REFERENCES Dict_Kategorie(ID_Kategorii)
+);
+
+CREATE TABLE Cenniki (
+  ID_Cennika    NUMBER PRIMARY KEY,
+  ID_Kategorii  NUMBER NOT NULL,
+  Cena_Doba     NUMBER(10,2) NOT NULL,
+  Obowiazuje_Od DATE NOT NULL,
+  Obowiazuje_Do DATE,
+  CONSTRAINT fk_cennik_kategoria 
+    FOREIGN KEY (ID_Kategorii) REFERENCES Dict_Kategorie(ID_Kategorii)
+);
+
+CREATE TABLE Pracownicy (
+  ID_Pracownika NUMBER PRIMARY KEY,
+  ID_Oddzialu   NUMBER NOT NULL,
+  Imie          VARCHAR2(50) NOT NULL,
+  Nazwisko      VARCHAR2(50) NOT NULL,
+  PESEL         CHAR(11) UNIQUE,
+  Rola          VARCHAR2(30) NOT NULL,
+  CONSTRAINT chk_pracownik_rola 
+    CHECK (Rola IN ('Administrator','Agent','Ksiegowy')),
+  CONSTRAINT fk_pracownik_oddzial 
+    FOREIGN KEY (ID_Oddzialu) REFERENCES Oddzialy(ID_Oddzialu)
+);
+
+CREATE TABLE Samochody (
+  ID_Samochodu      NUMBER PRIMARY KEY,
+  ID_Modelu         NUMBER NOT NULL,
+  ID_Statusu        NUMBER NOT NULL,
+  ID_Oddzialu       NUMBER NOT NULL,
+  Nr_Rejestracyjny  VARCHAR2(10) UNIQUE NOT NULL,
+  VIN               CHAR(17) UNIQUE NOT NULL,
+  Przebieg          NUMBER DEFAULT 0,
+  CONSTRAINT fk_samochod_model 
+    FOREIGN KEY (ID_Modelu) REFERENCES Modele_Konfiguracje(ID_Modelu),
+  CONSTRAINT fk_samochod_status 
+    FOREIGN KEY (ID_Statusu) REFERENCES Dict_Statusy_Pojazdu(ID_Statusu),
+  CONSTRAINT fk_samochod_oddzial 
+    FOREIGN KEY (ID_Oddzialu) REFERENCES Oddzialy(ID_Oddzialu)
+);
+
+CREATE TABLE Klienci (
+  ID_Klienta  NUMBER PRIMARY KEY,
+  Imie        VARCHAR2(50)  NOT NULL,
+  Nazwisko    VARCHAR2(50)  NOT NULL,
+  PESEL       CHAR(11)      UNIQUE,
+  NIP         CHAR(10),
+  Email       VARCHAR2(100) UNIQUE NOT NULL,
+  Telefon     VARCHAR2(15)
+);
+
+CREATE TABLE Wypozyczenia (
+  ID_Wypozyczenia           NUMBER PRIMARY KEY,
+  ID_Klienta                NUMBER NOT NULL,
+  ID_Samochodu              NUMBER NOT NULL,
+  ID_Pracownika_Wydajacego  NUMBER,
+  ID_Pracownika_Odbierajacego NUMBER,
+  Data_Wypozyczenia         TIMESTAMP,
+  Data_Zwrotu_Planowana     DATE NOT NULL,
+  Data_Zwrotu_Rzeczywista   TIMESTAMP,
+  Status                    VARCHAR2(20) NOT NULL,
+  CONSTRAINT chk_wyp_status 
+    CHECK (Status IN ('Rezerwacja','Aktywne','Zakonczone','Anulowane')),
+  CONSTRAINT fk_wyp_klient 
+    FOREIGN KEY (ID_Klienta) REFERENCES Klienci(ID_Klienta),
+  CONSTRAINT fk_wyp_samochod 
+    FOREIGN KEY (ID_Samochodu) REFERENCES Samochody(ID_Samochodu),
+  CONSTRAINT fk_wyp_pracownik_wyd 
+    FOREIGN KEY (ID_Pracownika_Wydajacego) REFERENCES Pracownicy(ID_Pracownika),
+  CONSTRAINT fk_wyp_pracownik_odb 
+    FOREIGN KEY (ID_Pracownika_Odbierajacego) REFERENCES Pracownicy(ID_Pracownika)
+);
+
+CREATE TABLE Faktury (
+  ID_Faktury       NUMBER PRIMARY KEY,
+  ID_Wypozyczenia  NUMBER UNIQUE NOT NULL,
+  Data_Wystawienia DATE NOT NULL,
+  Kwota_Netto      NUMBER(10,2),
+  Kwota_Brutto     NUMBER(10,2),
+  Status_Platnosci VARCHAR2(20) NOT NULL,
+  CONSTRAINT chk_faktura_status 
+    CHECK (Status_Platnosci IN ('Oczekuje','Oplacona','Zalegla')),
+  CONSTRAINT fk_faktura_wyp 
+    FOREIGN KEY (ID_Wypozyczenia) REFERENCES Wypozyczenia(ID_Wypozyczenia)
+);
+
+CREATE TABLE Historia_Logi_Pojazdu (
+  ID_Logu       NUMBER PRIMARY KEY,
+  ID_Samochodu  NUMBER NOT NULL,
+  ID_Pracownika NUMBER,
+  Data_Zmiany   TIMESTAMP DEFAULT SYSTIMESTAMP,
+  Stary_Status  NUMBER,
+  Nowy_Status   NUMBER NOT NULL,
+  CONSTRAINT fk_log_samochod 
+    FOREIGN KEY (ID_Samochodu) REFERENCES Samochody(ID_Samochodu),
+  CONSTRAINT fk_log_pracownik 
+    FOREIGN KEY (ID_Pracownika) REFERENCES Pracownicy(ID_Pracownika),
+  CONSTRAINT fk_log_stary_status 
+    FOREIGN KEY (Stary_Status) REFERENCES Dict_Statusy_Pojazdu(ID_Statusu),
+  CONSTRAINT fk_log_nowy_status 
+    FOREIGN KEY (Nowy_Status) REFERENCES Dict_Statusy_Pojazdu(ID_Statusu)
+);
+
+-- =====================================================
+-- 3. SEKWENCJE
+-- =====================================================
+CREATE SEQUENCE seq_oddzialy        START WITH 1 INCREMENT BY 1 NOCACHE NOCYCLE;
+CREATE SEQUENCE seq_modele          START WITH 1 INCREMENT BY 1 NOCACHE NOCYCLE;
+CREATE SEQUENCE seq_cenniki         START WITH 1 INCREMENT BY 1 NOCACHE NOCYCLE;
+CREATE SEQUENCE seq_pracownicy      START WITH 1 INCREMENT BY 1 NOCACHE NOCYCLE;
+CREATE SEQUENCE seq_samochody       START WITH 1 INCREMENT BY 1 NOCACHE NOCYCLE;
+CREATE SEQUENCE seq_klienci         START WITH 1 INCREMENT BY 1 NOCACHE NOCYCLE;
+CREATE SEQUENCE seq_wypozyczenia    START WITH 1 INCREMENT BY 1 NOCACHE NOCYCLE;
+CREATE SEQUENCE seq_faktury         START WITH 1 INCREMENT BY 1 NOCACHE NOCYCLE;
+CREATE SEQUENCE seq_logi            START WITH 1 INCREMENT BY 1 NOCACHE NOCYCLE;
+CREATE SEQUENCE seq_dict_kategorie  START WITH 5 INCREMENT BY 1 NOCACHE NOCYCLE;
+
+-- =====================================================
+-- 4. TRIGGERY DLA AUTOMATYCZNEGO ID
+-- =====================================================
+CREATE OR REPLACE TRIGGER trg_oddzialy_bi
+BEFORE INSERT ON Oddzialy FOR EACH ROW
+BEGIN
+  IF :NEW.ID_Oddzialu IS NULL THEN
+    :NEW.ID_Oddzialu := seq_oddzialy.NEXTVAL;
+  END IF;
+END;
+/
+
+CREATE OR REPLACE TRIGGER trg_modele_bi
+BEFORE INSERT ON Modele_Konfiguracje FOR EACH ROW
+BEGIN
+  IF :NEW.ID_Modelu IS NULL THEN
+    :NEW.ID_Modelu := seq_modele.NEXTVAL;
+  END IF;
+END;
+/
+
+CREATE OR REPLACE TRIGGER trg_cenniki_bi
+BEFORE INSERT ON Cenniki FOR EACH ROW
+BEGIN
+  IF :NEW.ID_Cennika IS NULL THEN
+    :NEW.ID_Cennika := seq_cenniki.NEXTVAL;
+  END IF;
+END;
+/
+
+CREATE OR REPLACE TRIGGER trg_pracownicy_bi
+BEFORE INSERT ON Pracownicy FOR EACH ROW
+BEGIN
+  IF :NEW.ID_Pracownika IS NULL THEN
+    :NEW.ID_Pracownika := seq_pracownicy.NEXTVAL;
+  END IF;
+END;
+/
+
+CREATE OR REPLACE TRIGGER trg_samochody_bi
+BEFORE INSERT ON Samochody FOR EACH ROW
+BEGIN
+  IF :NEW.ID_Samochodu IS NULL THEN
+    :NEW.ID_Samochodu := seq_samochody.NEXTVAL;
+  END IF;
+END;
+/
+
+CREATE OR REPLACE TRIGGER trg_klienci_bi
+BEFORE INSERT ON Klienci FOR EACH ROW
+BEGIN
+  IF :NEW.ID_Klienta IS NULL THEN
+    :NEW.ID_Klienta := seq_klienci.NEXTVAL;
+  END IF;
+END;
+/
+
+CREATE OR REPLACE TRIGGER trg_wypozyczenia_bi
+BEFORE INSERT ON Wypozyczenia FOR EACH ROW
+BEGIN
+  IF :NEW.ID_Wypozyczenia IS NULL THEN
+    :NEW.ID_Wypozyczenia := seq_wypozyczenia.NEXTVAL;
+  END IF;
+END;
+/
+
+CREATE OR REPLACE TRIGGER trg_faktury_bi
+BEFORE INSERT ON Faktury FOR EACH ROW
+BEGIN
+  IF :NEW.ID_Faktury IS NULL THEN
+    :NEW.ID_Faktury := seq_faktury.NEXTVAL;
+  END IF;
+END;
+/
+
+CREATE OR REPLACE TRIGGER trg_logi_bi
+BEFORE INSERT ON Historia_Logi_Pojazdu FOR EACH ROW
+BEGIN
+  IF :NEW.ID_Logu IS NULL THEN
+    :NEW.ID_Logu := seq_logi.NEXTVAL;
+  END IF;
+END;
+/
+
+-- Trigger logujący zmiany statusu pojazdu
+CREATE OR REPLACE TRIGGER trg_status_pojazdu_au
+AFTER UPDATE OF ID_Statusu ON Samochody FOR EACH ROW
+BEGIN
+  INSERT INTO Historia_Logi_Pojazdu (
+    ID_Samochodu, ID_Pracownika, Data_Zmiany, Stary_Status, Nowy_Status
+  ) VALUES (
+    :OLD.ID_Samochodu, NULL, SYSTIMESTAMP, :OLD.ID_Statusu, :NEW.ID_Statusu
+  );
+END;
+/
+
+-- =====================================================
+-- 5. DANE SŁOWNIKOWE I PODSTAWOWE
+-- =====================================================
+INSERT INTO Dict_Kategorie VALUES (1, 'Ekonomiczna');
+INSERT INTO Dict_Kategorie VALUES (2, 'Kompaktowa');
+INSERT INTO Dict_Kategorie VALUES (3, 'SUV');
+INSERT INTO Dict_Kategorie VALUES (4, 'Premium');
+
+INSERT INTO Dict_Statusy_Pojazdu VALUES (1, 'Dostepny');
+INSERT INTO Dict_Statusy_Pojazdu VALUES (2, 'Wynajety');
+INSERT INTO Dict_Statusy_Pojazdu VALUES (3, 'W serwisie');
+INSERT INTO Dict_Statusy_Pojazdu VALUES (4, 'Uszkodzony');
+
+-- Oddziały
+INSERT INTO Oddzialy(Nazwa, Miasto, Adres) VALUES('Oddział Warszawa Centrum','Warszawa','ul. Marszałkowska 1');
+INSERT INTO Oddzialy(Nazwa, Miasto, Adres) VALUES('Oddział Kraków','Kraków','ul. Floriańska 15');
+INSERT INTO Oddzialy(Nazwa, Miasto, Adres) VALUES('Oddział Gdańsk','Gdańsk','ul. Długa 8');
+
+-- Modele
+INSERT INTO Modele_Konfiguracje(ID_Kategorii, Marka, Model, Silnik, Sila) VALUES(1,'Toyota','Yaris','1.0 VVT-i','72KM');
+INSERT INTO Modele_Konfiguracje(ID_Kategorii, Marka, Model, Silnik, Sila) VALUES(2,'Volkswagen','Golf','1.5 TSI','150KM');
+INSERT INTO Modele_Konfiguracje(ID_Kategorii, Marka, Model, Silnik, Sila) VALUES(3,'Toyota','RAV4','2.0 D-4D','143KM');
+INSERT INTO Modele_Konfiguracje(ID_Kategorii, Marka, Model, Silnik, Sila) VALUES(4,'BMW','5 Series','3.0 xDrive','340KM');
+
+-- Cenniki
+INSERT INTO Cenniki(ID_Kategorii, Cena_Doba, Obowiazuje_Od) VALUES(1, 120.00, DATE '2026-01-01');
+INSERT INTO Cenniki(ID_Kategorii, Cena_Doba, Obowiazuje_Od) VALUES(2, 180.00, DATE '2026-01-01');
+INSERT INTO Cenniki(ID_Kategorii, Cena_Doba, Obowiazuje_Od) VALUES(3, 250.00, DATE '2026-01-01');
+INSERT INTO Cenniki(ID_Kategorii, Cena_Doba, Obowiazuje_Od) VALUES(4, 450.00, DATE '2026-01-01');
+
+-- Pracownicy
+INSERT INTO Pracownicy(ID_Oddzialu, Imie, Nazwisko, PESEL, Rola) VALUES(1,'Michał','Pączkowski','95010112345','Agent');
+INSERT INTO Pracownicy(ID_Oddzialu, Imie, Nazwisko, PESEL, Rola) VALUES(1,'Piotr','Poletyło','96020223456','Administrator');
+INSERT INTO Pracownicy(ID_Oddzialu, Imie, Nazwisko, PESEL, Rola) VALUES(2,'Anna','Kowalska','90030334567','Ksiegowy');
+
+-- Samochody
+INSERT INTO Samochody(ID_Modelu, ID_Statusu, ID_Oddzialu, Nr_Rejestracyjny, VIN, Przebieg) VALUES(1, 1, 1,'WA12345','12345678901234567', 45000);
+INSERT INTO Samochody(ID_Modelu, ID_Statusu, ID_Oddzialu, Nr_Rejestracyjny, VIN, Przebieg) VALUES(2, 1, 1,'WA67890','12345678901234568', 23000);
+INSERT INTO Samochody(ID_Modelu, ID_Statusu, ID_Oddzialu, Nr_Rejestracyjny, VIN, Przebieg) VALUES(3, 1, 2,'KR11111','12345678901234569', 67000);
+INSERT INTO Samochody(ID_Modelu, ID_Statusu, ID_Oddzialu, Nr_Rejestracyjny, VIN, Przebieg) VALUES(4, 1, 3,'GD22222','12345678901234570', 12000);
+
+-- Klienci
+INSERT INTO Klienci(Imie, Nazwisko, PESEL, Email, Telefon) VALUES('Jan','Kowalski','85040445678','jan.kowalski@gmail.com','500100200');
+INSERT INTO Klienci(Imie, Nazwisko, PESEL, Email, Telefon) VALUES('Anna','Nowak','90050556789','anna.nowak@gmail.com','501200300');
+INSERT INTO Klienci(Imie, Nazwisko, PESEL, Email, Telefon) VALUES('Tomasz','Wiśniewski','88060667890','tomasz.w@gmail.com','502300400');
+
+COMMIT;
+
+-- =====================================================
+-- 6. DODATKOWE KOLUMNY (Email, PasswordHash)
+-- =====================================================
+ALTER TABLE Pracownicy ADD Email VARCHAR2(100) UNIQUE;
+ALTER TABLE Pracownicy ADD PasswordHash VARCHAR2(255);
+ALTER TABLE Klienci ADD PasswordHash VARCHAR2(255);
+
+-- Uzupełnienie emaili pracowników
+UPDATE Pracownicy SET Email = 'michal.paczkowski@wypozyczalnia.pl' WHERE ID_Pracownika = 1;
+UPDATE Pracownicy SET Email = 'piotr.poletylo@wypozyczalnia.pl' WHERE ID_Pracownika = 2;
+UPDATE Pracownicy SET Email = 'anna.kowalska@wypozyczalnia.pl' WHERE ID_Pracownika = 3;
+COMMIT;
+
+-- =====================================================
+-- 7. PAKIET Z PROCEDURAMI I FUNKCJAMI (wersja zaktualizowana)
+-- =====================================================
+CREATE OR REPLACE PACKAGE pkg_wypozyczalnia AS
+  PROCEDURE RezerwujPojazd(
+    p_id_klienta   IN NUMBER,
+    p_id_samochodu IN NUMBER,
+    p_data_od      IN DATE,
+    p_data_do      IN DATE,
+    p_id_wyp       OUT NUMBER
+  );
+  PROCEDURE WydajPojazd(
+    p_id_wypozyczenia IN NUMBER,
+    p_id_pracownika   IN NUMBER
+  );
+  PROCEDURE ZwrocPojazd(
+    p_id_wypozyczenia IN NUMBER,
+    p_id_pracownika   IN NUMBER,
+    p_przebieg_konc   IN NUMBER
+  );
+  FUNCTION ObliczKoszt(
+    p_id_wypozyczenia IN NUMBER
+  ) RETURN NUMBER;
+  PROCEDURE GenerujRaportMiesięczny(
+    p_rok     IN NUMBER,
+    p_miesiac IN NUMBER
+  );
+END pkg_wypozyczalnia;
+/
+
+CREATE OR REPLACE PACKAGE BODY pkg_wypozyczalnia AS
+
+  PROCEDURE RezerwujPojazd(
+    p_id_klienta   IN NUMBER,
+    p_id_samochodu IN NUMBER,
+    p_data_od      IN DATE,
+    p_data_do      IN DATE,
+    p_id_wyp       OUT NUMBER
+  ) AS
+    v_status_dostepny  NUMBER;
+    v_status_samochodu NUMBER;
+    v_check            NUMBER;
+  BEGIN
+    SELECT ID_Statusu INTO v_status_samochodu
+    FROM Samochody WHERE ID_Samochodu = p_id_samochodu;
+
+    SELECT ID_Statusu INTO v_status_dostepny
+    FROM Dict_Statusy_Pojazdu WHERE Nazwa_Statusu = 'Dostepny';
+
+    IF v_status_samochodu != v_status_dostepny THEN
+      RAISE_APPLICATION_ERROR(-20001, 'Pojazd nie jest dostepny do rezerwacji.');
+    END IF;
+
+    SELECT COUNT(*) INTO v_check FROM Klienci WHERE ID_Klienta = p_id_klienta;
+    IF v_check = 0 THEN
+      RAISE_APPLICATION_ERROR(-20002, 'Klient o podanym ID nie istnieje.');
+    END IF;
+
+    -- UWAGA: Nie zmieniamy statusu samochodu przy rezerwacji – zmiana nastąpi dopiero przy wydaniu
+    INSERT INTO Wypozyczenia(
+      ID_Klienta, ID_Samochodu, Data_Zwrotu_Planowana, Status
+    ) VALUES (
+      p_id_klienta, p_id_samochodu, p_data_do, 'Rezerwacja'
+    ) RETURNING ID_Wypozyczenia INTO p_id_wyp;
+
+    COMMIT;
+  EXCEPTION
+    WHEN NO_DATA_FOUND THEN
+      RAISE_APPLICATION_ERROR(-20003, 'Nie znaleziono pojazdu o podanym ID.');
+    WHEN OTHERS THEN
+      ROLLBACK; RAISE;
+  END RezerwujPojazd;
+
+  PROCEDURE WydajPojazd(
+    p_id_wypozyczenia IN NUMBER,
+    p_id_pracownika   IN NUMBER
+  ) AS
+    v_status       VARCHAR2(20);
+    v_id_samochodu NUMBER;
+  BEGIN
+    SELECT Status, ID_Samochodu INTO v_status, v_id_samochodu
+    FROM Wypozyczenia WHERE ID_Wypozyczenia = p_id_wypozyczenia;
+
+    IF v_status != 'Rezerwacja' THEN
+      RAISE_APPLICATION_ERROR(-20004,
+        'Wypozyczenie nie ma statusu Rezerwacja. Aktualny status: ' || v_status);
+    END IF;
+
+    UPDATE Wypozyczenia SET
+      Status = 'Aktywne',
+      Data_Wypozyczenia = SYSTIMESTAMP,
+      ID_Pracownika_Wydajacego = p_id_pracownika
+    WHERE ID_Wypozyczenia = p_id_wypozyczenia;
+
+    -- Zmiana statusu samochodu na 'Wynajety' (ID_Statusu = 2) dopiero przy wydaniu
+    UPDATE Samochody SET ID_Statusu = 2
+    WHERE ID_Samochodu = v_id_samochodu;
+
+    COMMIT;
+  EXCEPTION
+    WHEN NO_DATA_FOUND THEN
+      RAISE_APPLICATION_ERROR(-20005, 'Nie znaleziono wypozyczenia o podanym ID.');
+    WHEN OTHERS THEN
+      ROLLBACK; RAISE;
+  END WydajPojazd;
+
+  PROCEDURE ZwrocPojazd(
+    p_id_wypozyczenia IN NUMBER,
+    p_id_pracownika   IN NUMBER,
+    p_przebieg_konc   IN NUMBER
+  ) AS
+    v_status       VARCHAR2(20);
+    v_id_samochodu NUMBER;
+    v_koszt_netto  NUMBER;
+    v_koszt_brutto NUMBER;
+  BEGIN
+    SELECT Status, ID_Samochodu INTO v_status, v_id_samochodu
+    FROM Wypozyczenia WHERE ID_Wypozyczenia = p_id_wypozyczenia;
+
+    IF v_status != 'Aktywne' THEN
+      RAISE_APPLICATION_ERROR(-20006,
+        'Wypozyczenie nie ma statusu Aktywne. Aktualny status: ' || v_status);
+    END IF;
+
+    UPDATE Wypozyczenia SET
+      Status = 'Zakonczone',
+      Data_Zwrotu_Rzeczywista = SYSTIMESTAMP,
+      ID_Pracownika_Odbierajacego = p_id_pracownika
+    WHERE ID_Wypozyczenia = p_id_wypozyczenia;
+
+    UPDATE Samochody SET
+      Przebieg = p_przebieg_konc, ID_Statusu = 1
+    WHERE ID_Samochodu = v_id_samochodu;
+
+    v_koszt_netto  := ObliczKoszt(p_id_wypozyczenia);
+    v_koszt_brutto := ROUND(v_koszt_netto * 1.23, 2);
+
+    INSERT INTO Faktury(
+      ID_Wypozyczenia, Data_Wystawienia, Kwota_Netto, Kwota_Brutto, Status_Platnosci
+    ) VALUES (
+      p_id_wypozyczenia, SYSDATE, v_koszt_netto, v_koszt_brutto, 'Oczekuje'
+    );
+    COMMIT;
+  EXCEPTION
+    WHEN NO_DATA_FOUND THEN
+      RAISE_APPLICATION_ERROR(-20007, 'Nie znaleziono wypozyczenia o podanym ID.');
+    WHEN OTHERS THEN
+      ROLLBACK; RAISE;
+  END ZwrocPojazd;
+
+  FUNCTION ObliczKoszt(p_id_wypozyczenia IN NUMBER) RETURN NUMBER AS
+    v_dni       NUMBER;
+    v_cena_doba NUMBER;
+  BEGIN
+    SELECT
+      CEIL(CAST(w.Data_Zwrotu_Rzeczywista AS DATE) -
+           CAST(w.Data_Wypozyczenia AS DATE)),
+      c.Cena_Doba
+    INTO v_dni, v_cena_doba
+    FROM Wypozyczenia w
+    JOIN Samochody s ON w.ID_Samochodu = s.ID_Samochodu
+    JOIN Modele_Konfiguracje m ON s.ID_Modelu = m.ID_Modelu
+    JOIN Cenniki c ON m.ID_Kategorii = c.ID_Kategorii
+    WHERE w.ID_Wypozyczenia = p_id_wypozyczenia
+      AND (c.Obowiazuje_Do IS NULL OR c.Obowiazuje_Do >= SYSDATE);
+    RETURN v_dni * v_cena_doba;
+  EXCEPTION
+    WHEN NO_DATA_FOUND THEN
+      RAISE_APPLICATION_ERROR(-20008, 'Nie znaleziono danych do obliczenia kosztu.');
+  END ObliczKoszt;
+
+  PROCEDURE GenerujRaportMiesięczny(
+    p_rok     IN NUMBER,
+    p_miesiac IN NUMBER
+  ) AS
+    v_liczba_wypozyczen     NUMBER;
+    v_przychod_netto        NUMBER;
+    v_przychod_brutto       NUMBER;
+    v_liczba_niezaplaconych NUMBER;
+    CURSOR c_niezaplacone IS
+      SELECT f.ID_Faktury, k.Imie, k.Nazwisko, k.Email,
+             f.Kwota_Brutto, f.Data_Wystawienia
+      FROM Faktury f
+      JOIN Wypozyczenia w ON f.ID_Wypozyczenia = w.ID_Wypozyczenia
+      JOIN Klienci k ON w.ID_Klienta = k.ID_Klienta
+      WHERE f.Status_Platnosci != 'Oplacona'
+        AND EXTRACT(YEAR  FROM f.Data_Wystawienia) = p_rok
+        AND EXTRACT(MONTH FROM f.Data_Wystawienia) = p_miesiac;
+  BEGIN
+    SELECT COUNT(*), NVL(SUM(f.Kwota_Netto),0), NVL(SUM(f.Kwota_Brutto),0)
+    INTO v_liczba_wypozyczen, v_przychod_netto, v_przychod_brutto
+    FROM Wypozyczenia w
+    JOIN Faktury f ON w.ID_Wypozyczenia = f.ID_Wypozyczenia
+    WHERE EXTRACT(YEAR  FROM w.Data_Zwrotu_Rzeczywista) = p_rok
+      AND EXTRACT(MONTH FROM w.Data_Zwrotu_Rzeczywista) = p_miesiac
+      AND w.Status = 'Zakonczone';
+
+    DBMS_OUTPUT.PUT_LINE('========================================');
+    DBMS_OUTPUT.PUT_LINE('RAPORT MIESIĘCZNY: ' || p_miesiac || '/' || p_rok);
+    DBMS_OUTPUT.PUT_LINE('========================================');
+    DBMS_OUTPUT.PUT_LINE('Liczba wypożyczeń: ' || v_liczba_wypozyczen);
+    DBMS_OUTPUT.PUT_LINE('Przychód netto:    ' || v_przychod_netto  || ' PLN');
+    DBMS_OUTPUT.PUT_LINE('Przychód brutto:   ' || v_przychod_brutto || ' PLN');
+    DBMS_OUTPUT.PUT_LINE('----------------------------------------');
+    DBMS_OUTPUT.PUT_LINE('NIEZAPŁACONE FAKTURY:');
+
+    v_liczba_niezaplaconych := 0;
+    FOR rec IN c_niezaplacone LOOP
+      v_liczba_niezaplaconych := v_liczba_niezaplaconych + 1;
+      DBMS_OUTPUT.PUT_LINE(
+        'Faktura #' || rec.ID_Faktury ||
+        ' | ' || rec.Imie || ' ' || rec.Nazwisko ||
+        ' | ' || rec.Kwota_Brutto || ' PLN' ||
+        ' | ' || TO_CHAR(rec.Data_Wystawienia, 'DD-MM-YYYY')
+      );
+    END LOOP;
+    DBMS_OUTPUT.PUT_LINE('Niezapłaconych: ' || v_liczba_niezaplaconych);
+    DBMS_OUTPUT.PUT_LINE('========================================');
+  END GenerujRaportMiesięczny;
+
+END pkg_wypozyczalnia;
+/
+
+-- =====================================================
+-- 8. WIDOKI
+-- =====================================================
+CREATE OR REPLACE VIEW v_dostepne_auta AS
+SELECT 
+  s.ID_Samochodu,
+  m.Marka,
+  m.Model,
+  m.Silnik,
+  m.Sila,
+  s.Nr_Rejestracyjny,
+  s.Przebieg,
+  o.Miasto,
+  o.Nazwa AS Oddzial,
+  k.Nazwa_Kategorii AS Kategoria,
+  c.Cena_Doba
+FROM Samochody s
+JOIN Modele_Konfiguracje m ON s.ID_Modelu = m.ID_Modelu
+JOIN Dict_Statusy_Pojazdu ds ON s.ID_Statusu = ds.ID_Statusu
+JOIN Oddzialy o ON s.ID_Oddzialu = o.ID_Oddzialu
+JOIN Dict_Kategorie k ON m.ID_Kategorii = k.ID_Kategorii
+JOIN Cenniki c ON m.ID_Kategorii = c.ID_Kategorii
+WHERE ds.Nazwa_Statusu = 'Dostepny'
+  AND (c.Obowiazuje_Do IS NULL OR c.Obowiazuje_Do >= SYSDATE);
+
+CREATE OR REPLACE VIEW v_historia_wynajmow AS
+SELECT
+  w.ID_Wypozyczenia,
+  k.Imie || ' ' || k.Nazwisko AS Klient,
+  k.Email,
+  m.Marka || ' ' || m.Model AS Pojazd,
+  s.Nr_Rejestracyjny,
+  w.Data_Wypozyczenia,
+  w.Data_Zwrotu_Planowana,
+  w.Data_Zwrotu_Rzeczywista,
+  w.Status,
+  f.Kwota_Netto,
+  f.Kwota_Brutto,
+  f.Status_Platnosci
+FROM Wypozyczenia w
+JOIN Klienci k ON w.ID_Klienta = k.ID_Klienta
+JOIN Samochody s ON w.ID_Samochodu = s.ID_Samochodu
+JOIN Modele_Konfiguracje m ON s.ID_Modelu = m.ID_Modelu
+LEFT JOIN Faktury f ON w.ID_Wypozyczenia = f.ID_Wypozyczenia;
+
+-- =====================================================
+-- 9. GRANTY DLA RÓL
+-- =====================================================
+-- db_datareader (odczyt)
+GRANT SELECT ON Dict_Kategorie TO db_datareader;
+GRANT SELECT ON Dict_Statusy_Pojazdu TO db_datareader;
+GRANT SELECT ON Oddzialy TO db_datareader;
+GRANT SELECT ON Modele_Konfiguracje TO db_datareader;
+GRANT SELECT ON Cenniki TO db_datareader;
+GRANT SELECT ON Pracownicy TO db_datareader;
+GRANT SELECT ON Samochody TO db_datareader;
+GRANT SELECT ON Klienci TO db_datareader;
+GRANT SELECT ON Wypozyczenia TO db_datareader;
+GRANT SELECT ON Faktury TO db_datareader;
+GRANT SELECT ON Historia_Logi_Pojazdu TO db_datareader;
+GRANT SELECT ON v_dostepne_auta TO db_datareader;
+GRANT SELECT ON v_historia_wynajmow TO db_datareader;
+
+-- db_datawriter (zapis)
+GRANT INSERT, UPDATE, DELETE ON Klienci TO db_datawriter;
+GRANT INSERT, UPDATE, DELETE ON Wypozyczenia TO db_datawriter;
+GRANT INSERT, UPDATE, DELETE ON Samochody TO db_datawriter;
+GRANT INSERT, UPDATE, DELETE ON Faktury TO db_datawriter;
+GRANT INSERT, UPDATE, DELETE ON Pracownicy TO db_datawriter;
+GRANT INSERT, UPDATE, DELETE ON Oddzialy TO db_datawriter;
+GRANT INSERT, UPDATE, DELETE ON Modele_Konfiguracje TO db_datawriter;
+GRANT INSERT, UPDATE, DELETE ON Cenniki TO db_datawriter;
+GRANT INSERT, UPDATE, DELETE ON Historia_Logi_Pojazdu TO db_datawriter;
+
+-- db_procexecutor (wykonywanie procedur)
+GRANT EXECUTE ON pkg_wypozyczalnia TO db_procexecutor;
+
+-- =====================================================
+-- 10. AUDYT (wymaga uprawnień SYSTEM lub ADMIN)
+-- =====================================================
+AUDIT INSERT, UPDATE, DELETE ON wypozyczalnia_owner.Wypozyczenia BY SESSION;
+AUDIT INSERT, UPDATE, DELETE ON wypozyczalnia_owner.Faktury BY SESSION;
+AUDIT INSERT, UPDATE, DELETE ON wypozyczalnia_owner.Klienci BY SESSION;
+AUDIT INSERT, UPDATE, DELETE ON wypozyczalnia_owner.Samochody BY SESSION;
+
+-- =====================================================
+-- 11. ROZSZERZONE DANE TESTOWE
+-- =====================================================
+-- Dodanie 10 dodatkowych klientów
+BEGIN
+  FOR i IN 4..13 LOOP
+    INSERT INTO Klienci(Imie, Nazwisko, PESEL, Email, Telefon, PasswordHash)
+    VALUES(
+      'Klient' || i,
+      'Testowy' || i,
+      LPAD(i, 11, '0'),
+      'klient' || i || '@test.pl',
+      '50000' || LPAD(i, 5, '0'),
+      '$2a$11$dummyhashfortestingpurposesonly' || i
+    );
+  END LOOP;
+  COMMIT;
+END;
+/
+
+-- Dodanie 10 dodatkowych samochodów
+BEGIN
+  FOR i IN 1..10 LOOP
+    INSERT INTO Samochody(ID_Modelu, ID_Statusu, ID_Oddzialu, 
+                          Nr_Rejestracyjny, VIN, Przebieg)
+    VALUES(
+      MOD(i-1, 4) + 1,
+      1,
+      MOD(i-1, 3) + 1,
+      'TS' || LPAD(i, 5, '0'),
+      'VIN' || LPAD(i*7, 14, '0'),
+      i * 10000
+    );
+  END LOOP;
+  COMMIT;
+END;
+/
+
+-- Generator 500 zakończonych wypożyczeń z ostatnich 2 lat
+BEGIN
+  FOR i IN 1..500 LOOP
+    DECLARE
+      v_id_wyp     NUMBER;
+      v_id_klienta NUMBER;
+      v_id_sam     NUMBER;
+      v_data_od    TIMESTAMP;
+      v_data_do    DATE;
+      v_data_zwrot TIMESTAMP;
+      v_dni        NUMBER;
+      v_koszt      NUMBER;
+      v_cena       NUMBER;
+    BEGIN
+      v_id_klienta := MOD(i, 13) + 1;
+      v_id_sam     := MOD(i, 14) + 1;
+      v_data_od    := SYSTIMESTAMP - (MOD(i * 7, 730) + 1);
+      v_dni        := MOD(i, 14) + 1;
+      v_data_do    := CAST(v_data_od AS DATE) + v_dni;
+      v_data_zwrot := v_data_od + v_dni;
+
+      INSERT INTO Wypozyczenia(
+        ID_Klienta, ID_Samochodu,
+        Data_Wypozyczenia, Data_Zwrotu_Planowana,
+        Data_Zwrotu_Rzeczywista,
+        ID_Pracownika_Wydajacego, ID_Pracownika_Odbierajacego,
+        Status
+      ) VALUES (
+        v_id_klienta, v_id_sam,
+        v_data_od, v_data_do,
+        v_data_zwrot,
+        MOD(i, 3) + 1, MOD(i, 3) + 1,
+        'Zakonczone'
+      ) RETURNING ID_Wypozyczenia INTO v_id_wyp;
+
+      SELECT c.Cena_Doba INTO v_cena
+      FROM Cenniki c
+      JOIN Modele_Konfiguracje m ON c.ID_Kategorii = m.ID_Kategorii
+      JOIN Samochody s ON m.ID_Modelu = s.ID_Modelu
+      WHERE s.ID_Samochodu = v_id_sam
+        AND (c.Obowiazuje_Do IS NULL OR c.Obowiazuje_Do >= SYSDATE)
+        AND ROWNUM = 1;
+
+      v_koszt := v_dni * v_cena;
+
+      INSERT INTO Faktury(
+        ID_Wypozyczenia, Data_Wystawienia,
+        Kwota_Netto, Kwota_Brutto, Status_Platnosci
+      ) VALUES (
+        v_id_wyp, CAST(v_data_zwrot AS DATE),
+        v_koszt, ROUND(v_koszt * 1.23, 2),
+        CASE WHEN MOD(i, 10) = 0 THEN 'Zalegla'
+             WHEN MOD(i, 5)  = 0 THEN 'Oczekuje'
+             ELSE 'Oplacona' END
+      );
+
+      -- Zmiana statusu (trigger loguje)
+      UPDATE Samochody SET ID_Statusu = 2 WHERE ID_Samochodu = v_id_sam;
+      UPDATE Samochody SET ID_Statusu = 1 WHERE ID_Samochodu = v_id_sam;
+
+    EXCEPTION
+      WHEN OTHERS THEN NULL;
+    END;
+  END LOOP;
+  COMMIT;
+END;
+/
+
+-- Dodatkowe 1500 wypożyczeń (łącznie 2000)
+BEGIN
+  FOR i IN 501..2000 LOOP
+    DECLARE
+      v_id_wyp     NUMBER;
+      v_id_klienta NUMBER;
+      v_id_sam     NUMBER;
+      v_data_od    TIMESTAMP;
+      v_data_do    DATE;
+      v_data_zwrot TIMESTAMP;
+      v_dni        NUMBER;
+      v_koszt      NUMBER;
+      v_cena       NUMBER;
+    BEGIN
+      v_id_klienta := MOD(i, 13) + 1;
+      v_id_sam     := MOD(i, 14) + 1;
+      v_data_od    := SYSTIMESTAMP - (MOD(i * 3, 700) + 1);
+      v_dni        := MOD(i, 14) + 1;
+      v_data_do    := CAST(v_data_od AS DATE) + v_dni;
+      v_data_zwrot := v_data_od + v_dni;
+
+      INSERT INTO Wypozyczenia(
+        ID_Klienta, ID_Samochodu,
+        Data_Wypozyczenia, Data_Zwrotu_Planowana,
+        Data_Zwrotu_Rzeczywista,
+        ID_Pracownika_Wydajacego, ID_Pracownika_Odbierajacego,
+        Status
+      ) VALUES (
+        v_id_klienta, v_id_sam,
+        v_data_od, v_data_do,
+        v_data_zwrot,
+        MOD(i, 3) + 1, MOD(i, 3) + 1,
+        'Zakonczone'
+      ) RETURNING ID_Wypozyczenia INTO v_id_wyp;
+
+      SELECT c.Cena_Doba INTO v_cena
+      FROM Cenniki c
+      JOIN Modele_Konfiguracje m ON c.ID_Kategorii = m.ID_Kategorii
+      JOIN Samochody s ON m.ID_Modelu = s.ID_Modelu
+      WHERE s.ID_Samochodu = v_id_sam
+        AND (c.Obowiazuje_Do IS NULL OR c.Obowiazuje_Do >= SYSDATE)
+        AND ROWNUM = 1;
+
+      v_koszt := v_dni * v_cena;
+
+      INSERT INTO Faktury(
+        ID_Wypozyczenia, Data_Wystawienia,
+        Kwota_Netto, Kwota_Brutto, Status_Platnosci
+      ) VALUES (
+        v_id_wyp, CAST(v_data_zwrot AS DATE),
+        v_koszt, ROUND(v_koszt * 1.23, 2),
+        CASE WHEN MOD(i, 10) = 0 THEN 'Zalegla'
+             WHEN MOD(i, 5)  = 0 THEN 'Oczekuje'
+             ELSE 'Oplacona' END
+      );
+
+      UPDATE Samochody SET ID_Statusu = 2 WHERE ID_Samochodu = v_id_sam;
+      UPDATE Samochody SET ID_Statusu = 1 WHERE ID_Samochodu = v_id_sam;
+
+    EXCEPTION
+      WHEN OTHERS THEN NULL;
+    END;
+  END LOOP;
+  COMMIT;
+END;
+/
+
+-- =====================================================
+-- 12. TABELA ARCHIWALNA I PROCEDURA ARCHIWIZACJI
+-- =====================================================
+CREATE TABLE Wypozyczenia_Archiwum AS 
+SELECT w.*, CAST(NULL AS TIMESTAMP) AS Data_Archiwizacji
+FROM Wypozyczenia w WHERE 1=0;
+
+ALTER TABLE Wypozyczenia_Archiwum MODIFY Data_Archiwizacji DEFAULT SYSTIMESTAMP;
+
+CREATE INDEX idx_arch_data ON Wypozyczenia_Archiwum(Data_Zwrotu_Rzeczywista);
+CREATE INDEX idx_arch_klient ON Wypozyczenia_Archiwum(ID_Klienta);
+
+CREATE OR REPLACE PROCEDURE ArchiwizujWypozyczenia(
+  p_miesiac_wstecz IN NUMBER DEFAULT 12
+) AS
+  v_liczba_przeniesonych NUMBER := 0;
+  v_data_graniczna       DATE;
+BEGIN
+  v_data_graniczna := ADD_MONTHS(SYSDATE, -p_miesiac_wstecz);
+
+  INSERT INTO Wypozyczenia_Archiwum (ID_Wypozyczenia, ID_Klienta, ID_Samochodu,
+    ID_Pracownika_Wydajacego, ID_Pracownika_Odbierajacego,
+    Data_Wypozyczenia, Data_Zwrotu_Planowana, Data_Zwrotu_Rzeczywista, Status,
+    Data_Archiwizacji)
+  SELECT w.*, SYSTIMESTAMP
+  FROM Wypozyczenia w
+  WHERE w.Status = 'Zakonczone'
+    AND CAST(w.Data_Zwrotu_Rzeczywista AS DATE) < v_data_graniczna;
+
+  v_liczba_przeniesonych := SQL%ROWCOUNT;
+
+  DELETE FROM Faktury
+  WHERE ID_Wypozyczenia IN (
+    SELECT ID_Wypozyczenia FROM Wypozyczenia
+    WHERE Status = 'Zakonczone'
+      AND CAST(Data_Zwrotu_Rzeczywista AS DATE) < v_data_graniczna
+  );
+
+  DELETE FROM Wypozyczenia
+  WHERE Status = 'Zakonczone'
+    AND CAST(Data_Zwrotu_Rzeczywista AS DATE) < v_data_graniczna;
+
+  COMMIT;
+
+  DBMS_OUTPUT.PUT_LINE('Zarchiwizowano: ' || v_liczba_przeniesonych || ' wypożyczeń');
+  DBMS_OUTPUT.PUT_LINE('Data graniczna: ' || TO_CHAR(v_data_graniczna, 'DD-MM-YYYY'));
+EXCEPTION
+  WHEN OTHERS THEN
+    ROLLBACK;
+    RAISE;
+END;
+/
+
+GRANT INSERT, UPDATE, DELETE ON Wypozyczenia_Archiwum TO db_datawriter;
+GRANT EXECUTE ON ArchiwizujWypozyczenia TO db_procexecutor;
+
+-- =====================================================
+-- 13. DODATKOWE INDEKSY
+-- =====================================================
+CREATE INDEX idx_wypozyczenia_klient ON Wypozyczenia(ID_Klienta);
+CREATE INDEX idx_wypozyczenia_samochod ON Wypozyczenia(ID_Samochodu);
+CREATE INDEX idx_wypozyczenia_status ON Wypozyczenia(Status);
+CREATE INDEX idx_samochody_status ON Samochody(ID_Statusu);
+CREATE INDEX idx_samochody_oddzial ON Samochody(ID_Oddzialu);
+CREATE INDEX idx_logi_samochod ON Historia_Logi_Pojazdu(ID_Samochodu);
+
+CREATE BITMAP INDEX idx_faktury_status_platnosci ON Faktury(Status_Platnosci);
+CREATE INDEX idx_wyp_rok ON Wypozyczenia(EXTRACT(YEAR FROM CAST(Data_Zwrotu_Rzeczywista AS DATE)));
+CREATE INDEX idx_wyp_status_klient ON Wypozyczenia(Status, ID_Klienta);
+
+SELECT index_name, uniqueness 
+FROM user_indexes 
+WHERE table_name = 'FAKTURY';
+
+-- =====================================================
+-- 14. PRZYKŁADOWE TESTY (opcjonalne)
+-- =====================================================
+-- Sprawdzenie widoku dostępnych aut
+-- SELECT * FROM v_dostepne_auta;
+
+-- Przykład rezerwacji, wydania i zwrotu
+/*
+DECLARE
+  v_id_wyp NUMBER;
+BEGIN
+  pkg_wypozyczalnia.RezerwujPojazd(
+    p_id_klienta   => 1,
+    p_id_samochodu => 1,
+    p_data_od      => SYSDATE,
+    p_data_do      => SYSDATE + 3,
+    p_id_wyp       => v_id_wyp
+  );
+  DBMS_OUTPUT.PUT_LINE('Rezerwacja ID: ' || v_id_wyp);
+  
+  pkg_wypozyczalnia.WydajPojazd(v_id_wyp, 1);
+  DBMS_OUTPUT.PUT_LINE('Pojazd wydany');
+  
+  pkg_wypozyczalnia.ZwrocPojazd(v_id_wyp, 2, 45300);
+  DBMS_OUTPUT.PUT_LINE('Pojazd zwrócony');
+END;
+/
+*/
+
+-- Generowanie raportu miesięcznego
+-- EXEC pkg_wypozyczalnia.GenerujRaportMiesięczny(EXTRACT(YEAR FROM SYSDATE), EXTRACT(MONTH FROM SYSDATE));
+
+-- Archiwizacja wypożyczeń starszych niż 6 miesięcy
+-- EXEC ArchiwizujWypozyczenia(6);
+
+COMMIT;
+
